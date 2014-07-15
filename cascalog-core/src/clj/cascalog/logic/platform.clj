@@ -13,7 +13,7 @@
   (generator? [p x]
     "Returns true if the supplied x is a generator, false
     otherwise.")
-  (generator [p gen fields options]
+  (generator-platform [p gen fields options]
     "Returns some source representation.")
 
   (to-generator [p x]))
@@ -23,7 +23,7 @@
   IPlatform
   (generator? [_ _] false)
 
-  (generator [_ _ _ _] nil)
+  (generator-platform [_ _ _ _] nil)
 
   (to-generator [_ _] nil))
 
@@ -37,8 +37,19 @@
   `(binding [*context* ~context]
      ~@body))
 
-(defn gen? [g]
-  (generator? *context* g))
+ ;; ## Generator multimethod
+
+(defn gen-dispatch
+  [gen]
+  [(type *context*) (type gen)])
+
+(defmulti generator gen-dispatch)
+
+(defn gen? [gen]
+  "Evaluates whether there is a method to dispatch to for the
+  for the multimethod."
+  (not (nil?
+        (.getMethod generator (gen-dispatch gen)))))
 
 (defn compile-query [query]
   (zip/postwalk-edit

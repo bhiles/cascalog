@@ -1,15 +1,14 @@
 (ns cascalog.cascading.types
   (:require [jackknife.core :as u]
             [cascalog.logic.algebra :refer (plus Semigroup)]
-            [cascalog.cascading.tap :as tap])
+            [cascalog.cascading.tap :as tap]
+            [cascalog.logic.platform :as platform])
   (:import [cascalog Util]
            [cascalog.logic.platform ClojureFlow]
            [cascalog.cascading.tap CascalogTap]
            [cascading.pipe Pipe Merge]
            [cascading.tap Tap]
-           [cascading.tuple Fields Tuple]
-           [com.twitter.maple.tap MemorySourceTap]
-           [jcascalog Subquery]))
+           [cascading.tuple Fields Tuple]))
 
 ;; ## Tuple Conversion
 ;;
@@ -31,46 +30,8 @@
   Object
   (to-tuple [v] (to-tuple [v])))
 
-;; ## Generator Protocol
-
-(defprotocol IGenerator
-  "Accepts some type and returns a ClojureFlow that can be used as a
-  generator. The idea is that a clojure flow can always be used
-  directly as a generator."
-  (generator [x]))
-
-(defn generator?
-  "Returns true if the supplied item can be used as a Cascalog
-  generator, false otherwise."
-  [x]
-  (satisfies? IGenerator x))
-
 ;; Note that we need to use getIdentifier on the taps.
 
-(extend-protocol IGenerator
-  Subquery
-  (generator [sq]
-    (generator (.getCompiledSubquery sq)))
-
-  CascalogTap
-  (generator [tap] (generator (:source tap)))
-
-  clojure.lang.IPersistentVector
-  (generator [v] (generator (or (seq v) ())))
-
-  clojure.lang.ISeq
-  (generator [v]
-    (generator
-     (MemorySourceTap. (map to-tuple v) Fields/ALL)))
-
-  java.util.ArrayList
-  (generator [coll]
-    (generator (into [] coll)))
-
-  Tap
-  (generator [tap]
-    (let [id (u/uuid)]
-      (ClojureFlow. {id tap} nil nil nil (Pipe. id) nil))))
 
 ;; ## Sink Typeclasses
 
