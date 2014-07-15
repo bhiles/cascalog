@@ -8,6 +8,7 @@
             [cascalog.logic.platform :refer (compile-query set-context!)]
             [cascalog.logic.parse :as parse]
             [cascalog.logic.predmacro :as pm]
+            [cascalog.logic.platform :as platform]
             [cascalog.cascading.platform]
             [cascalog.cascading.tap :as tap]
             [cascalog.cascading.conf :as conf]
@@ -220,7 +221,7 @@
           (u/throw-illegal
            "Data structure is empty -- memory sources must contain tuples.")
           (let [names (or fields (v/gen-nullable-vars (num-out-fields g)))
-                gen (types/generator g)]
+                gen (platform/generator platform/*context* g)]
             (name-vars gen names)))
         :else (u/throw-illegal "Can't combine " g)))
 
@@ -231,7 +232,7 @@
   (let [g (to-tail g)
         names (get-out-fields g)
         gens (cons g (map #(to-tail % :fields names) gens))]
-    (types/generator
+    (platform/generator platform/*context*
      (algebra/sum gens))))
 
 (defn union
@@ -260,12 +261,12 @@
 
   Tap
   (select-fields [tap fields]
-    (-> (types/generator tap)
+    (-> (platform/generator platform/*context* tap)
         (ops/select* fields)))
 
   CascalogTap
   (select-fields [tap fields]
-    (-> (types/generator tap)
+    (-> (platform/generator platform/*context* tap)
         (ops/select* fields))))
 
 ;; ## Defining custom operations

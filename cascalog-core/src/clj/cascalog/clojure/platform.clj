@@ -69,7 +69,7 @@
     ;; TODO: expand this to handle other types (like cascading.platform's)
     true)
 
-  (generator [_ gen output options]
+  (generator-platform [_ gen output options]
     (let [id (u/uuid)]
       (ClojureFlow. {id gen} nil nil nil nil nil)))
 

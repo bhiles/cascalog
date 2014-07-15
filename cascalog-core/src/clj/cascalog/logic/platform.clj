@@ -7,13 +7,18 @@
 
 (defrecord ClojureFlow [source-map sink-map trap-map tails pipe name])
 
+;; ## Runner multimethod
+(comment (defmulti to-generator
+           (fn [p x]
+             [(type p) (type x)])))
+
 ;; ## Platform Protocol
 
 (defprotocol IPlatform
   (generator? [p x]
     "Returns true if the supplied x is a generator, false
     otherwise.")
-  (generator [p gen fields options]
+  (generator-platform [p gen fields options]
     "Returns some source representation.")
 
   (to-generator [p x]))
@@ -23,7 +28,7 @@
   IPlatform
   (generator? [_ _] false)
 
-  (generator [_ _ _ _] nil)
+  (generator-platform [_ _ _ _] nil)
 
   (to-generator [_ _] nil))
 
@@ -36,6 +41,21 @@
   [context & body]
   `(binding [*context* ~context]
      ~@body))
+
+ ;; ## Generator multimethod
+
+(defn mgen-dispatch
+  [p gen]
+  [(type p) (type gen)])
+
+(defmulti generator mgen-dispatch)
+
+(defn is-a-mgenerator? [p gen]
+  "Evaluates whether there is a method to dispatch to for the
+  for the multimethod."
+  (not (nil?
+        (.getMethod generator
+                    (mgen-dispatch p gen)))))
 
 (defn gen? [g]
   (generator? *context* g))

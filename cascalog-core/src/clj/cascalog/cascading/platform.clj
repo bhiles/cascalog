@@ -10,8 +10,8 @@
             [cascalog.logic.algebra :refer (sum)]
             [cascalog.logic.fn :as serfn]
             [cascalog.logic.vars :as v]
-            [cascalog.cascading.types :refer (IGenerator generator)]
-            [cascalog.logic.platform :refer (compile-query IPlatform)])
+            [cascalog.logic.platform :refer (compile-query generator is-a-mgenerator? IPlatform)]
+            [cascalog.logic.platform :as platform])
   (:import [cascading.pipe Each Every]
            [cascading.tuple Fields]
            [cascading.operation Function Filter]
@@ -31,7 +31,12 @@
             Inner Outer Existence]
            [cascalog.logic.def ParallelAggregator ParallelBuffer Prepared]
            [cascalog.logic.platform ClojureFlow]
-           [jcascalog Predicate]))
+           [jcascalog Predicate]
+           [jcascalog Subquery]
+           [cascalog.cascading.tap CascalogTap]
+           [com.twitter.maple.tap MemorySourceTap]
+           [cascading.tap Tap]
+           [cascading.pipe Pipe]           ))
 
 (extend-protocol p/IRawPredicate
   Predicate
@@ -207,7 +212,7 @@
 (extend-protocol IRunner
   Object
   (to-generator [x]
-    (types/generator x))
+    (generator platform/*context* x))
 
   cascalog.logic.predicate.Generator
   (to-generator [{:keys [gen]}] gen)
@@ -294,18 +299,6 @@
   (to-generator [item]
     (:node item)))
 
-(extend-protocol IGenerator
-  TailStruct
-  (generator [sq]
-    (compile-query sq))
-
-  RawSubquery
-  (generator [sq]
-    (generator (parse/build-rule sq)))
-
-  ClojureFlow
-  (generator [x] x))
-
 (defn- init-pipe-name [options]
   (or (:name (:trap options))
       (u/uuid))) 
@@ -319,11 +312,12 @@
 
 (defrecord CascadingPlatform []
   IPlatform
-  (generator? [_ x]
-    (satisfies? IGenerator x))
 
-  (generator [_ gen fields options]
-    (-> (types/generator gen)
+  (generator? [p x]
+    (is-a-mgenerator? p x))
+
+  (generator-platform [p gen fields options]
+    (-> (platform/generator p gen)
         (update-in [:trap-map] #(merge % (init-trap-map options)))
         (ops/rename-pipe (init-pipe-name options))
         (ops/rename* fields)
@@ -332,6 +326,44 @@
 
   (to-generator [_ x]
     (to-generator x)))
+
+(defmethod generator [CascadingPlatform Subquery]
+  [p sq]
+  (generator p (.getCompiledSubquery sq)))
+
+(defmethod generator [CascadingPlatform CascalogTap]
+  [p tap]
+  (generator p (:source tap)))
+
+(defmethod generator [CascadingPlatform clojure.lang.IPersistentVector]
+  [p v]
+  (generator p (or (seq v) ())))
+
+(defmethod generator [CascadingPlatform clojure.lang.ISeq]
+  [p v]
+  (generator p
+              (MemorySourceTap. (map types/to-tuple v) Fields/ALL)))
+
+(defmethod generator [CascadingPlatform java.util.ArrayList]
+  [p coll]
+  (generator p (into [] coll)))
+
+(defmethod generator [CascadingPlatform Tap]
+  [p tap]
+  (let [id (u/uuid)]
+    (ClojureFlow. {id tap} nil nil nil (Pipe. id) nil)))
+
+(defmethod generator [CascadingPlatform TailStruct]
+  [p sq]
+  (compile-query sq))
+
+(defmethod generator [CascadingPlatform RawSubquery]
+  [p sq]
+  (generator p (parse/build-rule sq)))
+
+(defmethod generator [CascadingPlatform ClojureFlow]
+  [p sq]
+  sq)
 
 (comment
   "MOVE these to tests."

@@ -4,9 +4,10 @@
             [cascalog.logic.fn :as serfn]
             [cascalog.logic.vars :as v]
             [cascalog.logic.algebra :refer (sum)]
+            [cascalog.logic.platform :as platform]
             [cascalog.cascading.util :as casc :refer (fields default-output)]
             [cascalog.cascading.tap :as tap]
-            [cascalog.cascading.types :refer (generator to-sink)]
+            [cascalog.cascading.types :refer (to-sink)]
             [jackknife.core :refer (safe-assert throw-illegal uuid)]
             [jackknife.seq :as s :refer (unweave collectify)])
   (:import [cascading.tuple Fields]
@@ -38,7 +39,7 @@
   "Accepts a generator and a function from pipe to pipe and applies
   the operation to the active head pipe."
   [flow fn]
-  (update-in (generator flow)
+  (update-in (platform/generator platform/*context* flow)
              [:pipe]
              fn))
 
@@ -66,7 +67,7 @@
 (defn name-flow
   "Assigns a new name to the clojure flow."
   [gen name]
-  (-> (generator gen)
+  (-> (platform/generator platform/*context*  gen)
       (assoc :name name)))
 
 (defn rename-pipe
@@ -543,7 +544,7 @@
   [pairs declared-group-vars op out-fields]
   (safe-assert (seq declared-group-vars)
                "Cannot do global grouping with multigroup")
-  (let [flows (map (comp generator first) pairs)
+  (let [flows (map (comp (partial platform/generator platform/*context*) first) pairs)
         out-vars (map second pairs)
         group-vars (apply set/intersection (map set out-vars))
         num-vars (reduce + (map count out-vars))]
