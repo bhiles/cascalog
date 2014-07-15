@@ -2,7 +2,6 @@
   (:require [jackknife.core :as u]
             [cascalog.logic.algebra :refer (plus Semigroup)]
             [cascalog.cascading.tap :as tap]
-            [cascalog.logic.platform :refer (is-a-mgenerator?)]
             [cascalog.logic.platform :as platform])
   (:import [cascalog Util]
            [cascalog.logic.platform ClojureFlow]
@@ -31,12 +30,6 @@
 
   Object
   (to-tuple [v] (to-tuple [v])))
-
-(defn generator?
-  "Returns true if the supplied item can be used as a Cascalog
-  generator, false otherwise."
-  [x]
-  (is-a-mgenerator? platform/*context* x))
 
 ;; Note that we need to use getIdentifier on the taps.
 

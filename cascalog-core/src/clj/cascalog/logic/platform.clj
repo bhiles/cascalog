@@ -44,21 +44,18 @@
 
  ;; ## Generator multimethod
 
-(defn mgen-dispatch
+(defn gen-dispatch
   [p gen]
   [(type p) (type gen)])
 
-(defmulti generator mgen-dispatch)
+(defmulti generator gen-dispatch)
 
-(defn is-a-mgenerator? [p gen]
+(defn gen? [gen]
   "Evaluates whether there is a method to dispatch to for the
   for the multimethod."
   (not (nil?
         (.getMethod generator
-                    (mgen-dispatch p gen)))))
-
-(defn gen? [g]
-  (generator? *context* g))
+                    (gen-dispatch *context* gen)))))
 
 (defn compile-query [query]
   (zip/postwalk-edit

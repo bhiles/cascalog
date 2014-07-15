@@ -10,7 +10,7 @@
             [cascalog.logic.algebra :refer (sum)]
             [cascalog.logic.fn :as serfn]
             [cascalog.logic.vars :as v]
-            [cascalog.logic.platform :refer (compile-query generator is-a-mgenerator? IPlatform)]
+            [cascalog.logic.platform :refer (compile-query generator gen? IPlatform)]
             [cascalog.logic.platform :as platform])
   (:import [cascading.pipe Each Every]
            [cascading.tuple Fields]
@@ -313,8 +313,8 @@
 (defrecord CascadingPlatform []
   IPlatform
 
-  (generator? [p x]
-    (is-a-mgenerator? p x))
+  (generator? [_ x]
+    (gen? x))
 
   (generator-platform [p gen fields options]
     (-> (platform/generator p gen)

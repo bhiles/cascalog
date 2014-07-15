@@ -216,7 +216,7 @@
 
 (defn to-tail [g & {:keys [fields]}]
   (cond (parse/tail? g) g
-        (types/generator? g)
+        (platform/gen? g)
         (if (and (coll? g) (empty? g))
           (u/throw-illegal
            "Data structure is empty -- memory sources must contain tuples.")
