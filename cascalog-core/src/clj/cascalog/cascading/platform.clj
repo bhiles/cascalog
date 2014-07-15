@@ -10,8 +10,7 @@
             [cascalog.logic.algebra :refer (sum)]
             [cascalog.logic.fn :as serfn]
             [cascalog.logic.vars :as v]
-            [cascalog.logic.platform :refer (compile-query generator gen? IPlatform)]
-            [cascalog.logic.platform :as platform])
+            [cascalog.logic.platform :refer (compile-query generator gen? IPlatform)])
   (:import [cascading.pipe Each Every]
            [cascading.tuple Fields]
            [cascading.operation Function Filter]
@@ -212,7 +211,7 @@
 (extend-protocol IRunner
   Object
   (to-generator [x]
-    (generator platform/*context* x))
+    (generator x))
 
   cascalog.logic.predicate.Generator
   (to-generator [{:keys [gen]}] gen)
@@ -317,7 +316,7 @@
     (gen? x))
 
   (generator-platform [p gen fields options]
-    (-> (platform/generator gen)
+    (-> (generator gen)
         (update-in [:trap-map] #(merge % (init-trap-map options)))
         (ops/rename-pipe (init-pipe-name options))
         (ops/rename* fields)
