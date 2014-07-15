@@ -317,7 +317,7 @@
     (gen? x))
 
   (generator-platform [p gen fields options]
-    (-> (platform/generator p gen)
+    (-> (platform/generator gen)
         (update-in [:trap-map] #(merge % (init-trap-map options)))
         (ops/rename-pipe (init-pipe-name options))
         (ops/rename* fields)
@@ -328,41 +328,40 @@
     (to-generator x)))
 
 (defmethod generator [CascadingPlatform Subquery]
-  [p sq]
-  (generator p (.getCompiledSubquery sq)))
+  [sq]
+  (generator (.getCompiledSubquery sq)))
 
 (defmethod generator [CascadingPlatform CascalogTap]
-  [p tap]
-  (generator p (:source tap)))
+  [tap]
+  (generator (:source tap)))
 
 (defmethod generator [CascadingPlatform clojure.lang.IPersistentVector]
-  [p v]
-  (generator p (or (seq v) ())))
+  [v]
+  (generator (or (seq v) ())))
 
 (defmethod generator [CascadingPlatform clojure.lang.ISeq]
-  [p v]
-  (generator p
-              (MemorySourceTap. (map types/to-tuple v) Fields/ALL)))
+  [v]
+  (generator (MemorySourceTap. (map types/to-tuple v) Fields/ALL)))
 
 (defmethod generator [CascadingPlatform java.util.ArrayList]
-  [p coll]
-  (generator p (into [] coll)))
+  [coll]
+  (generator (into [] coll)))
 
 (defmethod generator [CascadingPlatform Tap]
-  [p tap]
+  [tap]
   (let [id (u/uuid)]
     (ClojureFlow. {id tap} nil nil nil (Pipe. id) nil)))
 
 (defmethod generator [CascadingPlatform TailStruct]
-  [p sq]
+  [sq]
   (compile-query sq))
 
 (defmethod generator [CascadingPlatform RawSubquery]
-  [p sq]
-  (generator p (parse/build-rule sq)))
+  [sq]
+  (generator (parse/build-rule sq)))
 
 (defmethod generator [CascadingPlatform ClojureFlow]
-  [p sq]
+  [sq]
   sq)
 
 (comment

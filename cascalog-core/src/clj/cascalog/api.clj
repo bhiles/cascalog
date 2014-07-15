@@ -221,7 +221,7 @@
           (u/throw-illegal
            "Data structure is empty -- memory sources must contain tuples.")
           (let [names (or fields (v/gen-nullable-vars (num-out-fields g)))
-                gen (platform/generator platform/*context* g)]
+                gen (platform/generator g)]
             (name-vars gen names)))
         :else (u/throw-illegal "Can't combine " g)))
 
@@ -232,7 +232,7 @@
   (let [g (to-tail g)
         names (get-out-fields g)
         gens (cons g (map #(to-tail % :fields names) gens))]
-    (platform/generator platform/*context*
+    (platform/generator
      (algebra/sum gens))))
 
 (defn union
@@ -261,12 +261,12 @@
 
   Tap
   (select-fields [tap fields]
-    (-> (platform/generator platform/*context* tap)
+    (-> (platform/generator tap)
         (ops/select* fields)))
 
   CascalogTap
   (select-fields [tap fields]
-    (-> (platform/generator platform/*context* tap)
+    (-> (platform/generator tap)
         (ops/select* fields))))
 
 ;; ## Defining custom operations

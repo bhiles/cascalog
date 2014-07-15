@@ -39,7 +39,7 @@
   "Accepts a generator and a function from pipe to pipe and applies
   the operation to the active head pipe."
   [flow fn]
-  (update-in (platform/generator platform/*context* flow)
+  (update-in (platform/generator flow)
              [:pipe]
              fn))
 
@@ -67,7 +67,7 @@
 (defn name-flow
   "Assigns a new name to the clojure flow."
   [gen name]
-  (-> (platform/generator platform/*context*  gen)
+  (-> (platform/generator gen)
       (assoc :name name)))
 
 (defn rename-pipe
@@ -544,7 +544,7 @@
   [pairs declared-group-vars op out-fields]
   (safe-assert (seq declared-group-vars)
                "Cannot do global grouping with multigroup")
-  (let [flows (map (comp (partial platform/generator platform/*context*) first) pairs)
+  (let [flows (map (comp (partial platform/generator) first) pairs)
         out-vars (map second pairs)
         group-vars (apply set/intersection (map set out-vars))
         num-vars (reduce + (map count out-vars))]

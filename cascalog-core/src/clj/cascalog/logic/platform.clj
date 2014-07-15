@@ -45,8 +45,8 @@
  ;; ## Generator multimethod
 
 (defn gen-dispatch
-  [p gen]
-  [(type p) (type gen)])
+  [gen]
+  [(type *context*) (type gen)])
 
 (defmulti generator gen-dispatch)
 
@@ -54,8 +54,7 @@
   "Evaluates whether there is a method to dispatch to for the
   for the multimethod."
   (not (nil?
-        (.getMethod generator
-                    (gen-dispatch *context* gen)))))
+        (.getMethod generator (gen-dispatch gen)))))
 
 (defn compile-query [query]
   (zip/postwalk-edit
