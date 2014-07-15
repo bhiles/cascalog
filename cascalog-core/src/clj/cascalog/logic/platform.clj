@@ -7,11 +7,6 @@
 
 (defrecord ClojureFlow [source-map sink-map trap-map tails pipe name])
 
-;; ## Runner multimethod
-(comment (defmulti to-generator
-           (fn [p x]
-             [(type p) (type x)])))
-
 ;; ## Platform Protocol
 
 (defprotocol IPlatform

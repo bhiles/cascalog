@@ -36,7 +36,7 @@
            [cascalog.cascading.tap CascalogTap]
            [com.twitter.maple.tap MemorySourceTap]
            [cascading.tap Tap]
-           [cascading.pipe Pipe]           ))
+           [cascading.pipe Pipe]))
 
 (extend-protocol p/IRawPredicate
   Predicate

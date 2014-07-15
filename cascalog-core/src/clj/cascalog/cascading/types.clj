@@ -8,8 +8,7 @@
            [cascalog.cascading.tap CascalogTap]
            [cascading.pipe Pipe Merge]
            [cascading.tap Tap]
-           [cascading.tuple Fields Tuple]
-))
+           [cascading.tuple Fields Tuple]))
 
 ;; ## Tuple Conversion
 ;;
