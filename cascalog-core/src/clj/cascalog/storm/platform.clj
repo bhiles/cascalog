@@ -55,14 +55,14 @@
 (defmacro mk-tridentfn
   [op]
   (let [fn-name (symbol (str op "___"))]
-     `(m/deftridentfn ~fn-name
-       [tuple# coll#]
-       (prn "inside trident def")
-       (when-let [args# (m/first tuple#)]
-         (let [results# (apply ~op args#)]
-        (doseq [result# results#]
-          (m/emit-fn coll# result#)))))
-     (ns-resolve *ns* (symbol fn-name))))
+    `(do
+       (m/deftridentfn ~fn-name
+           [tuple# coll#]
+           (when-let [args# (m/first tuple#)]
+             (let [results# (apply ~op args#)]
+               (doseq [result# results#]
+                 (m/emit-fn coll# result#))))))
+    (ns-resolve *ns* (symbol fn-name))))
 
 (defmethod op-storm ::d/mapcat
   [op]
@@ -78,13 +78,6 @@
     ([] (op))
     ([tuple] (op tuple))
     ([t1 t2] (op t1 t2))))
-
-(m/deftridentfn split-args
-  [tuple coll]
-  (when-let [args (m/first tuple)]
-    (let [words (string/split args #" ")]
-      (doseq [word words]
-             (m/emit-fn coll word)))))
 
 (defprotocol IRunner
   (to-generator [item]))
@@ -110,7 +103,7 @@
       (prn "revised-op is " revised-op)
       (prn "revised-op is " (type revised-op))
       ;;(m/each source input op output)
-      (m/each source input split-args output)
+      (m/each source input revised-op output)
       ))
 
   FilterApplication
