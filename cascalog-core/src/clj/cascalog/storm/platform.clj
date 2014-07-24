@@ -55,14 +55,13 @@
 (defmacro mk-tridentfn
   [op]
   (let [fn-name (symbol (str op "___"))]
-    `(do
-       (m/deftridentfn ~fn-name
+    `(do (m/deftridentfn ~fn-name
            [tuple# coll#]
            (when-let [args# (m/first tuple#)]
              (let [results# (apply ~op args#)]
                (doseq [result# results#]
-                 (m/emit-fn coll# result#))))))
-    (ns-resolve *ns* (symbol fn-name))))
+                 (m/emit-fn coll# result#)))))
+         ~fn-name)))
 
 (defmethod op-storm ::d/mapcat
   [op]
@@ -86,25 +85,24 @@
 
   Projection
   (to-generator [{:keys [source fields]}]
-    (m/project source fields))
+    source)
 
   Generator
   (to-generator [{:keys [gen]}]
-    (prn "inside generator")
-    (m/new-stream (TridentTopology.) "words-count" gen))
+    (let [topology (TridentTopology.)
+          stream (m/new-stream topology (u/uuid) gen)]
+      {:topology topology :stream stream}))
 
   Application
   (to-generator [{:keys [source operation]}]
-    (prn "inside application")
-    (let [{:keys [op input output]} operation
-          revised-op (op-storm op)]
-      (prn "input is " input)
-      (prn "output is " output)
-      (prn "revised-op is " revised-op)
-      (prn "revised-op is " (type revised-op))
-      ;;(m/each source input op output)
-      (m/each source input revised-op output)
-      ))
+    (prn "source is " source)
+    (let [{:keys [topology stream]} source
+          {:keys [op input output]} operation
+          revised-op (op-storm op)]         
+      (prn "op is " op " with type " (type op))
+      (prn "rop is " revised-op " with type " (type revised-op))
+      (let [updated-stream (m/each stream input revised-op output)]
+        {:topology topology :stream updated-stream})))
 
   FilterApplication
   (to-generator [{:keys [source filter]}]
@@ -113,14 +111,16 @@
 
   Grouping
   (to-generator [{:keys [source aggregators grouping-fields options]}]
-    (let [{:keys [op input output]} (first aggregators)
-          revised-op (agg-op-storm op)]
-      (-> (m/group-by source grouping-fields)
-          (m/persistent-aggregate (MemoryMapState$Factory.)
-                                  input
-                                  revised-op
-                                  output))))
-  
+    (let [{:keys [topology stream]} source
+          {:keys [op input output]} (first aggregators)
+          revised-op (agg-op-storm op)
+          updated-stream (-> (m/group-by stream grouping-fields)
+                             (m/persistent-aggregate (MemoryMapState$Factory.)
+                                                     input
+                                                     revised-op
+                                                     output))]
+      {:topology topology :stream updated-stream}))
+
   TailStruct
   (to-generator [{:keys [node available-fields]}]
     node))
