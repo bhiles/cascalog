@@ -1,5 +1,5 @@
 (ns cascalog.storm.platform
-  (:require [cascalog.logic.predicate]
+  (:require [cascalog.logic.predicate :as pred]
             [cascalog.logic.platform :refer (compile-query  IPlatform)]
             [cascalog.logic.parse :as parse]
             [jackknife.core :as u]
@@ -12,7 +12,10 @@
            [cascalog.logic.predicate Generator RawSubquery]
            [cascalog.logic.def ParallelAggregator ParallelBuffer]
            [storm.trident.testing FixedBatchSpout MemoryMapState$Factory]
-           [storm.trident TridentTopology]))
+           [storm.trident TridentTopology TridentState]
+           [cascalog.logic.predicate Operation]
+           [storm.trident.operation.builtin MapGet]
+           [backtype.storm LocalDRPC]))
 
 ;;(defn to-tuple)
 
@@ -97,6 +100,12 @@
   (let [ {:keys [init-var combine-var present-var]} op]
        (mk-combine init-var combine-var present-var)))    
 
+;; Extending to-predicate functions to allow for additional types of
+;; operations
+(defmethod pred/to-predicate TridentState
+  [op input output]
+  (Operation. op input output))
+
 (defprotocol IRunner
   (to-generator [item]))
 
@@ -108,20 +117,24 @@
 
   Generator
   (to-generator [{:keys [gen]}]
-    (let [topology (TridentTopology.)
-          stream (m/new-stream topology (u/uuid) gen)]
-      {:topology topology :stream stream}))
+    (prn "inside to-runner generator " gen)
+    gen)
 
   Application
   (to-generator [{:keys [source operation]}]
     (prn "source is " source)
-    (let [{:keys [topology stream]} source
-          {:keys [op input output]} operation
-          revised-op (op-storm op)]         
-      (prn "op is " op " with type " (type op))
-      (prn "rop is " revised-op " with type " (type revised-op))
-      (let [updated-stream (m/each stream input revised-op output)]
-        {:topology topology :stream updated-stream})))
+    (let [{:keys [drpc topology stream]} source
+          {:keys [op input output]} operation]
+      (if (instance? TridentState op)
+        (do
+          (prn "inside Trident state application")
+          (let [updated-stream (m/state-query stream op input (MapGet.) output)]
+            {:drpc drpc :topology topology :stream updated-stream}))
+        (let [revised-op (op-storm op)]
+          (prn "op is " op " with type " (type op))
+          (prn "rop is " revised-op " with type " (type revised-op))
+          (let [updated-stream (m/each stream input revised-op output)]
+            {:drpc drpc :topology topology :stream updated-stream})))))
 
   FilterApplication
   (to-generator [{:keys [source filter]}]
@@ -130,7 +143,7 @@
 
   Grouping
   (to-generator [{:keys [source aggregators grouping-fields options]}]
-    (let [{:keys [topology stream]} source
+    (let [{:keys [drpc topology stream]} source
           {:keys [op input output]} (first aggregators)]
       (prn "op is " op)
       (prn "grouping fields  are " grouping-fields)
@@ -142,28 +155,42 @@
                                                        input
                                                        revised-op
                                                        output))]
-        {:topology topology :stream updated-stream})))
+        {:drpc drpc :topology topology :stream updated-stream})))
 
   TailStruct
   (to-generator [{:keys [node available-fields]}]
     node))
+
+
+(m/deftridentfn
+  identity-args
+  [tuple coll]
+  (when-let [args (m/first tuple)]
+    (m/emit-fn coll args)))
 
 (defprotocol IGenerator
   (generator [x]))
 
 (extend-protocol IGenerator
   
-  ;; A bunch of generators that finally return  a seq
-  clojure.lang.IPersistentVector
-  (generator [v]
-    (generator (or (seq v) ())))
+  ;; storm generators
   
-  clojure.lang.ISeq
-  (generator [v] v)
+  FixedBatchSpout
+  (generator [gen]
+    (let [topology (TridentTopology.)
+          stream (m/new-stream topology (u/uuid) gen)]
+      (prn "inside IGen and gen is " gen)
+      {:drpc nil :topology topology :stream stream}))
 
-  java.util.ArrayList
-  (generator [coll]
-    (generator (into [] coll)))  
+  TridentTopology
+  (generator [topology]
+    (let [local-drpc (LocalDRPC.)
+          ;; TODO: need to remove the hardcoded drpc title
+          stream (-> (m/drpc-stream topology "words" local-drpc)
+                     ;; TODO: allow output fields to be passed into
+                     ;; here (for output fields of identity args
+                     (m/each ["args"] identity-args ["?args"]))]
+      {:drpc local-drpc :topology topology :stream stream}))
   
   ;; These generators act differently than the ones above
   TailStruct
@@ -192,8 +219,7 @@
 
   (generator [_ gen output options]
     (prn "generator output fields are " output)
-    (doto (mk-fixed-batch-spout output)
-      (.setCycle true)))
+    (generator gen))
 
   (to-generator [_ x]
     (to-generator x)))
