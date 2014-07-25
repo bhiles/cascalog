@@ -40,17 +40,17 @@
 
 ;(defn tuple-sort)
 
-(defmulti op-storm
-  (fn [op]
-    (type op)))
-
-(defmethod op-storm ::d/map
-  [op]  
-  (m/deftridentfn split-args
-    [tuple coll]
-    (when-let [args (m/first tuple)]
-      (let [result (apply op args)]
-        (m/emit-fn coll result)))))
+(defmacro mk-combine
+  [op]
+  (let [{:keys [init-var combine-var present-var]} op
+        fn-name (symbol (str init-var "combagg" "___"))]
+    `(do
+       (m/defcombineraggregator ~fn-name
+         ([] ~present-var)
+         ([tuple#] (apply ~init-var tuple#))
+         ([t1# t2#] (apply ~combine-var t1# t2#))
+         )
+       ~fn-name)))
 
 (defmacro mk-tridentfn
   [op]
@@ -63,6 +63,18 @@
                  (m/emit-fn coll# result#)))))
          ~fn-name)))
 
+(defmulti op-storm
+  (fn [op]
+    (type op)))
+
+(defmethod op-storm ::d/map
+  [op]  
+  (m/deftridentfn split-args
+    [tuple coll]
+    (when-let [args (m/first tuple)]
+      (let [result (apply op args)]
+        (m/emit-fn coll result)))))
+
 (defmethod op-storm ::d/mapcat
   [op]
   (mk-tridentfn op))
@@ -71,12 +83,9 @@
   (fn [op]
     (type op)))
 
-(defmethod agg-op-storm ::d/aggregate
+(defmethod agg-op-storm ParallelAggregator
   [op]
-  (m/defcombineraggregator count-words
-    ([] (op))
-    ([tuple] (op tuple))
-    ([t1 t2] (op t1 t2))))
+  (mk-combine op))    
 
 (defprotocol IRunner
   (to-generator [item]))
