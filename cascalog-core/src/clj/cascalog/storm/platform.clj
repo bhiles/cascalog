@@ -17,7 +17,7 @@
            [storm.trident.operation.builtin MapGet]
            [backtype.storm LocalDRPC]))
 
-(defmacro mk-combine
+(defmacro mk-paragg-combineraggregator
   [init-var combine-var present-var]
   (let [fn-name (symbol (u/uuid))]
     `(do
@@ -27,14 +27,25 @@
          ([t1# t2#] (~combine-var t1# t2#)))
        ~fn-name)))
 
-(defmacro mk-tridentfn
+(defmacro mk-mapcat-tridentfn
   [op]
-  (let [fn-name (symbol (str op "___"))]
+  (let [fn-name (symbol (u/uuid))]
     `(do (m/deftridentfn ~fn-name
            [tuple# coll#]
            (when-let [args# (m/first tuple#)]
-             (let [results# (~op (apply str args#))]
-               (m/emit-fn coll# "abc"))))
+             (let [results# (~op args#)]
+               (doseq [result# results#]
+                 (m/emit-fn coll# result#)))))
+         ~fn-name)))
+
+(defmacro mk-map-tridentfn
+  [op]
+  (let [fn-name (symbol (u/uuid))]
+    `(do (m/deftridentfn ~fn-name
+           [tuple# coll#]
+           (when-let [args# (m/first tuple#)]
+             (let [result# (~op args#)]
+               (m/emit-fn coll# result#))))
          ~fn-name)))
 
 (defmulti op-storm
@@ -42,16 +53,12 @@
     (type op)))
 
 (defmethod op-storm ::d/map
-  [op]  
-  (m/deftridentfn split-args
-    [tuple coll]
-    (when-let [args (m/first tuple)]
-      (let [result (apply op args)]
-        (m/emit-fn coll result)))))
+  [op]
+  (mk-map-tridentfn op))
 
 (defmethod op-storm ::d/mapcat
   [op]
-  (mk-tridentfn op))
+  (mk-mapcat-tridentfn op))
 
 (defmulti agg-op-storm
   (fn [op]
@@ -60,7 +67,7 @@
 (defmethod agg-op-storm ParallelAggregator
   [op]
   (let [ {:keys [init-var combine-var present-var]} op]
-       (mk-combine init-var combine-var present-var)))    
+       (mk-paragg-combineraggregator init-var combine-var present-var)))    
 
 ;; Extending to-predicate functions to allow for additional types of
 ;; operations
