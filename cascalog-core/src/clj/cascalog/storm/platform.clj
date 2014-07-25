@@ -11,7 +11,7 @@
             FilterApplication Unique Join Grouping Rename]
            [cascalog.logic.predicate Generator RawSubquery]
            [cascalog.logic.def ParallelAggregator ParallelBuffer]
-           [storm.trident.testing MemoryMapState$Factory]
+           [storm.trident.testing FixedBatchSpout MemoryMapState$Factory]
            [storm.trident TridentTopology]))
 
 ;;(defn to-tuple)
@@ -41,14 +41,20 @@
 ;(defn tuple-sort)
 
 (defmacro mk-combine
-  [op]
-  (let [{:keys [init-var combine-var present-var]} op
-        fn-name (symbol (str init-var "combagg" "___"))]
+  [init-var combine-var present-var]
+  (let [fn-name (symbol (str init-var "combagg" "___"))]
+    (prn "init var is " init-var)
     `(do
        (m/defcombineraggregator ~fn-name
-         ([] ~present-var)
-         ([tuple#] (apply ~init-var tuple#))
-         ([t1# t2#] (apply ~combine-var t1# t2#))
+         ([]
+            (prn "combagg first arg")
+            nil)
+         ([tuple#]
+            (prn "combagg second arg and init-var " ~init-var " and tuple " tuple#)
+            (~init-var))
+         ([t1# t2#]
+            (prn "combagg third agg is " ~combine-var " and t1 " t1# " and t2 " t2# " and rs " (~combine-var t1# t2#)  )
+            (~combine-var t1# t2#))
          )
        ~fn-name)))
 
@@ -57,10 +63,13 @@
   (let [fn-name (symbol (str op "___"))]
     `(do (m/deftridentfn ~fn-name
            [tuple# coll#]
+           (prn "tuple is " tuple#)
            (when-let [args# (m/first tuple#)]
-             (let [results# (apply ~op args#)]
-               (doseq [result# results#]
-                 (m/emit-fn coll# result#)))))
+             (prn "args are " args#)
+             (let [results# (~op (apply str args#))]
+               (prn "results are " results#)
+               (prn "coll is " coll#)
+               (m/emit-fn coll# "abc"))))
          ~fn-name)))
 
 (defmulti op-storm
@@ -85,7 +94,8 @@
 
 (defmethod agg-op-storm ParallelAggregator
   [op]
-  (mk-combine op))    
+  (let [ {:keys [init-var combine-var present-var]} op]
+       (mk-combine init-var combine-var present-var)))    
 
 (defprotocol IRunner
   (to-generator [item]))
@@ -121,14 +131,18 @@
   Grouping
   (to-generator [{:keys [source aggregators grouping-fields options]}]
     (let [{:keys [topology stream]} source
-          {:keys [op input output]} (first aggregators)
-          revised-op (agg-op-storm op)
-          updated-stream (-> (m/group-by stream grouping-fields)
-                             (m/persistent-aggregate (MemoryMapState$Factory.)
-                                                     input
-                                                     revised-op
-                                                     output))]
-      {:topology topology :stream updated-stream}))
+          {:keys [op input output]} (first aggregators)]
+      (prn "op is " op)
+      (prn "grouping fields  are " grouping-fields)
+      (prn "Groupgin input fields are " input)
+      (prn "output fields are " output)
+      (let [revised-op (agg-op-storm op)
+            updated-stream (-> (m/group-by stream input)
+                               (m/persistent-aggregate (MemoryMapState$Factory.)
+                                                       input
+                                                       revised-op
+                                                       output))]
+        {:topology topology :stream updated-stream})))
 
   TailStruct
   (to-generator [{:keys [node available-fields]}]
@@ -160,13 +174,26 @@
   (generator [sq]
     (generator (parse/build-rule sq))))
 
+
+(defn mk-fixed-batch-spout [field-names]
+  (FixedBatchSpout.
+   ;; Name the tuples that the spout will emit.
+   (apply m/fields field-names)
+   3
+   (into-array (map m/values '("lord ogdoad"
+                               "master of level eight shadow world"
+                               "the willing vessel offers forth its pure essence")))))
+
+
 (defrecord StormPlatform []
   IPlatform
   (generator? [_ x]
     (satisfies? IGenerator x))
 
   (generator [_ gen output options]
-    (tri/feeder-spout output))
+    (prn "generator output fields are " output)
+    (doto (mk-fixed-batch-spout output)
+      (.setCycle true)))
 
   (to-generator [_ x]
     (to-generator x)))
