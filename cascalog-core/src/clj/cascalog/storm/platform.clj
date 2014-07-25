@@ -17,48 +17,14 @@
            [storm.trident.operation.builtin MapGet]
            [backtype.storm LocalDRPC]))
 
-;;(defn to-tuple)
-
-;;(defn to-tuples)
-
-;;(defn to-tuples-filter-nullable)
-
-;;(defn select-fields)
-
-;;(defn select-fields-w-default)
-
-;;(defn extract-values)
-
-;;(defn inner-join)
-
-;;(defn left-join)
-
-;;(defn left-excluding-join)
-
-;;(defn outer-join)
-
-;;(defn join)
-
-;;(defn smallest-arity [fun])
-
-;(defn tuple-sort)
-
 (defmacro mk-combine
   [init-var combine-var present-var]
-  (let [fn-name (symbol (str init-var "combagg" "___"))]
-    (prn "init var is " init-var)
+  (let [fn-name (symbol (u/uuid))]
     `(do
        (m/defcombineraggregator ~fn-name
-         ([]
-            (prn "combagg first arg")
-            nil)
-         ([tuple#]
-            (prn "combagg second arg and init-var " ~init-var " and tuple " tuple#)
-            (~init-var))
-         ([t1# t2#]
-            (prn "combagg third agg is " ~combine-var " and t1 " t1# " and t2 " t2# " and rs " (~combine-var t1# t2#)  )
-            (~combine-var t1# t2#))
-         )
+         ([] nil)
+         ([tuple#] (~init-var))
+         ([t1# t2#] (~combine-var t1# t2#)))
        ~fn-name)))
 
 (defmacro mk-tridentfn
@@ -66,12 +32,8 @@
   (let [fn-name (symbol (str op "___"))]
     `(do (m/deftridentfn ~fn-name
            [tuple# coll#]
-           (prn "tuple is " tuple#)
            (when-let [args# (m/first tuple#)]
-             (prn "args are " args#)
              (let [results# (~op (apply str args#))]
-               (prn "results are " results#)
-               (prn "coll is " coll#)
                (m/emit-fn coll# "abc"))))
          ~fn-name)))
 
@@ -117,22 +79,17 @@
 
   Generator
   (to-generator [{:keys [gen]}]
-    (prn "inside to-runner generator " gen)
     gen)
 
   Application
   (to-generator [{:keys [source operation]}]
-    (prn "source is " source)
     (let [{:keys [drpc topology stream]} source
           {:keys [op input output]} operation]
       (if (instance? TridentState op)
         (do
-          (prn "inside Trident state application")
           (let [updated-stream (m/state-query stream op input (MapGet.) output)]
             {:drpc drpc :topology topology :stream updated-stream}))
         (let [revised-op (op-storm op)]
-          (prn "op is " op " with type " (type op))
-          (prn "rop is " revised-op " with type " (type revised-op))
           (let [updated-stream (m/each stream input revised-op output)]
             {:drpc drpc :topology topology :stream updated-stream})))))
 
@@ -145,11 +102,9 @@
   (to-generator [{:keys [source aggregators grouping-fields options]}]
     (let [{:keys [drpc topology stream]} source
           {:keys [op input output]} (first aggregators)]
-      (prn "op is " op)
-      (prn "grouping fields  are " grouping-fields)
-      (prn "Groupgin input fields are " input)
-      (prn "output fields are " output)
       (let [revised-op (agg-op-storm op)
+            ;;TODO: currently grouping by input, but sometimes there
+            ;;is a grouping field           
             updated-stream (-> (m/group-by stream input)
                                (m/persistent-aggregate (MemoryMapState$Factory.)
                                                        input
@@ -169,37 +124,35 @@
     (m/emit-fn coll args)))
 
 (defprotocol IGenerator
-  (generator [x]))
+  (generator [x output]))
 
 (extend-protocol IGenerator
   
   ;; storm generators
   
   FixedBatchSpout
-  (generator [gen]
+  (generator [gen output]
     (let [topology (TridentTopology.)
-          stream (m/new-stream topology (u/uuid) gen)]
-      (prn "inside IGen and gen is " gen)
+          stream (-> (m/new-stream topology (u/uuid) gen)
+                     (m/each (.getOutputFields gen) identity-args output))]
       {:drpc nil :topology topology :stream stream}))
 
   TridentTopology
-  (generator [topology]
+  (generator [topology output]
     (let [local-drpc (LocalDRPC.)
-          ;; TODO: need to remove the hardcoded drpc title
-          stream (-> (m/drpc-stream topology "words" local-drpc)
-                     ;; TODO: allow output fields to be passed into
-                     ;; here (for output fields of identity args
-                     (m/each ["args"] identity-args ["?args"]))]
-      {:drpc local-drpc :topology topology :stream stream}))
+          drpc-name (u/uuid)
+          stream (-> (m/drpc-stream topology drpc-name local-drpc)
+                     (m/each ["args"] identity-args output))]
+      {:drpc [local-drpc drpc-name] :topology topology :stream stream}))
   
   ;; These generators act differently than the ones above
   TailStruct
-  (generator [sq]
+  (generator [sq output]
     (compile-query sq))
 
   RawSubquery
-  (generator [sq]
-    (generator (parse/build-rule sq))))
+  (generator [sq output]
+    (generator (parse/build-rule sq) output)))
 
 
 (defn mk-fixed-batch-spout [field-names]
@@ -211,15 +164,13 @@
                                "master of level eight shadow world"
                                "the willing vessel offers forth its pure essence")))))
 
-
 (defrecord StormPlatform []
   IPlatform
   (generator? [_ x]
     (satisfies? IGenerator x))
 
   (generator [_ gen output options]
-    (prn "generator output fields are " output)
-    (generator gen))
+    (generator gen output))
 
   (to-generator [_ x]
     (to-generator x)))
