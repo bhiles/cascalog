@@ -67,7 +67,7 @@
 (defmethod agg-op-storm ParallelAggregator
   [op]
   (let [ {:keys [init-var combine-var present-var]} op]
-       (mk-paragg-combineraggregator init-var combine-var present-var)))    
+       (mk-paragg-combineraggregator init-var combine-var present-var)))
 
 ;; Extending to-predicate functions to allow for additional types of
 ;; operations
@@ -112,7 +112,8 @@
       (let [revised-op (agg-op-storm op)
             ;;TODO: currently grouping by input, but sometimes there
             ;;is a grouping field           
-            updated-stream (-> (m/group-by stream input)
+            updated-stream (-> (m/project stream input)
+                               (m/group-by input)
                                (m/persistent-aggregate (MemoryMapState$Factory.)
                                                        input
                                                        revised-op
@@ -141,7 +142,8 @@
   (generator [gen output]
     (let [topology (TridentTopology.)
           stream (-> (m/new-stream topology (u/uuid) gen)
-                     (m/each (.getOutputFields gen) identity-args output))]
+                     (m/each (.getOutputFields gen) identity-args output)
+                     (m/project output))]
       {:drpc nil :topology topology :stream stream}))
 
   TridentTopology
@@ -149,7 +151,8 @@
     (let [local-drpc (LocalDRPC.)
           drpc-name (u/uuid)
           stream (-> (m/drpc-stream topology drpc-name local-drpc)
-                     (m/each ["args"] identity-args output))]
+                     (m/each ["args"] identity-args output)
+                     (m/project output))]
       {:drpc [local-drpc drpc-name] :topology topology :stream stream}))
   
   ;; These generators act differently than the ones above
