@@ -17,7 +17,19 @@
            [storm.trident.operation.builtin MapGet]
            [backtype.storm LocalDRPC]))
 
-(defmacro mk-paragg-combineraggregator
+
+;; TODO: this hasn't yet been tested
+(defmacro mk-aggregator
+  [op]
+  (let [fn-name (symbol (u/uuid))]
+    `(do
+       (m/defaggregator ~fn-name
+         ([batch-id# coll#] (m/emit-fn coll# (~op)))
+         ([state# tuple# coll#] (m/emit-fn coll# (~op state# tuple#)))
+         ([state# coll#] (m/emit-fn coll# (~op state#))))
+       ~fn-name)))
+
+(defmacro mk-combineraggregator
   [init-var combine-var present-var]
   (let [fn-name (symbol (u/uuid))]
     `(do
@@ -64,10 +76,14 @@
   (fn [op]
     (type op)))
 
+(defmethod agg-op-storm ::d/aggregate
+  [op]
+  (mk-aggregator op))
+
 (defmethod agg-op-storm ParallelAggregator
   [op]
   (let [ {:keys [init-var combine-var present-var]} op]
-       (mk-paragg-combineraggregator init-var combine-var present-var)))
+       (mk-combineraggregator init-var combine-var present-var)))
 
 ;; Extending to-predicate functions to allow for additional types of
 ;; operations
@@ -123,7 +139,6 @@
   TailStruct
   (to-generator [{:keys [node available-fields]}]
     node))
-
 
 (m/deftridentfn
   identity-args
