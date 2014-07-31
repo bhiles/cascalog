@@ -13,9 +13,19 @@
            [cascalog.logic.def ParallelAggregator ParallelBuffer]
            [storm.trident.testing FixedBatchSpout MemoryMapState$Factory]
            [storm.trident TridentTopology TridentState]
+           [storm.trident.spout ITridentSpout]
            [cascalog.logic.predicate Operation]
            [storm.trident.operation.builtin MapGet]
            [backtype.storm LocalDRPC]))
+
+;; TODO:
+;;    setup with feeder spout
+;;    setup with exec-drpc
+;;    wrap functions in taps
+;;      - how to pass in topology at the end? pass in sink before
+;;        before compiling query
+;;      - for time topology should be implicit
+;;    move tridentstate application into the join cascalog type
 
 
 ;; TODO: this hasn't yet been tested
@@ -125,15 +135,17 @@
   (to-generator [{:keys [source aggregators grouping-fields options]}]
     (let [{:keys [drpc topology stream]} source
           {:keys [op input output]} (first aggregators)]
+      ;; TODO: need to handle multiple aggregators use chained agg
       (let [revised-op (agg-op-storm op)
-            ;;TODO: currently grouping by input, but sometimes there
-            ;;is a grouping field           
-            updated-stream (-> (m/project stream input)
-                               (m/group-by input)
+            revised-grouping-fields (if (empty? grouping-fields) input grouping-fields)
+            updated-stream (-> stream
+                               (m/group-by revised-grouping-fields)
                                (m/persistent-aggregate (MemoryMapState$Factory.)
                                                        input
                                                        revised-op
-                                                       output))]
+                                                       output)
+                               (m/debug)
+                               )]
         {:drpc drpc :topology topology :stream updated-stream})))
 
   TailStruct
@@ -153,7 +165,7 @@
   
   ;; storm generators
   
-  FixedBatchSpout
+  ITridentSpout
   (generator [gen output]
     (let [topology (TridentTopology.)
           stream (-> (m/new-stream topology (u/uuid) gen)
