@@ -162,8 +162,6 @@
 
   FilterApplication
   (to-generator [{:keys [source filter]}]
-    (prn "source is " source )
-    (prn "filter is " filter)
     (let [{:keys [drpc topology stream]} source
           {:keys [op input]} filter
           revised-op (filter-op-storm op)]
@@ -187,7 +185,6 @@
 
   TailStruct
   (to-generator [{:keys [node available-fields]}]
-    (prn "inside Tailstruct")
     (let [{:keys [drpc topology stream]} node]
       (if (instance? TridentState stream)
         node
@@ -224,12 +221,10 @@
   ;; These generators act differently than the ones above
   TailStruct
   (generator [sq output]
-    (prn "generator TailStruct " sq output)
     (compile-query sq))
 
   RawSubquery
   (generator [sq output]
-    (prn "generator RawSubquery " sq output)
     (generator (parse/build-rule sq) output)))
 
 
@@ -248,7 +243,6 @@
     (satisfies? IGenerator x))
 
   (generator [_ gen output options]
-    (prn "before generator")
     (generator gen output))
 
   (to-generator [_ x]
