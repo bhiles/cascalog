@@ -35,6 +35,10 @@
 ;;      - for time topology should be implicit
 
 
+;; Later TODO:
+
+;;   enable inline parameters like (= ?pronoun "the")
+;;      trouble with parsing "the" since it doesn't appear in the stream
 
 ;; TODO: this hasn't yet been tested
 (defmacro mk-aggregator
@@ -78,6 +82,15 @@
                (m/emit-fn coll# result#))))
          ~fn-name)))
 
+(defmacro mk-filterfn
+  [op]
+  (let [fn-name (symbol (u/uuid))]
+    `(do (m/deffilter ~fn-name
+           [tuple#]
+           (when-let [args# (m/first tuple#)]
+             (~op args#)))
+         ~fn-name)))
+
 (defmulti op-storm
   (fn [op]
     (type op)))
@@ -89,6 +102,10 @@
 (defmethod op-storm ::d/mapcat
   [op]
   (mk-mapcat-tridentfn op))
+
+(defn filter-op-storm
+  [op]
+  (mk-filterfn op))
 
 (defmulti agg-op-storm
   (fn [op]
@@ -145,8 +162,12 @@
 
   FilterApplication
   (to-generator [{:keys [source filter]}]
-    (let [{:keys [op input]} filter]
-      (m/each source input op)))
+    (prn "source is " source )
+    (prn "filter is " filter)
+    (let [{:keys [drpc topology stream]} source
+          {:keys [op input]} filter
+          revised-op (filter-op-storm op)]
+      {:drpc drpc :topology topology :stream (m/each stream input revised-op)}))
 
   Grouping
   (to-generator [{:keys [source aggregators grouping-fields options]}]
