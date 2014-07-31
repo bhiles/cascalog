@@ -12,20 +12,30 @@
            [cascalog.logic.predicate Generator RawSubquery]
            [cascalog.logic.def ParallelAggregator ParallelBuffer]
            [storm.trident.testing FixedBatchSpout MemoryMapState$Factory]
-           [storm.trident TridentTopology TridentState]
+           [storm.trident TridentTopology TridentState Stream]
            [storm.trident.spout ITridentSpout]
            [cascalog.logic.predicate Operation]
            [storm.trident.operation.builtin MapGet]
            [backtype.storm LocalDRPC]))
 
 ;; TODO:
-;;    setup with feeder spout
+
+;;    Trouble with rename: wraps data into an array?  trims data to
+;;    first letter
+;;    how to re-use a stream so that it doesn't need to be re-created?
+;;      - 2 options:
+;;             1. realize it while parsing <-  A: No good spot
+;;             2. build it into the tap <- A: can't figure out 
+;;    - what is a predmacro? mentioned in parse.clj
+;;    investigate how to use a tap to feed the topology
+;;    splitting streams into multiple outputs
+;;    move tridentstate application into the join cascalog type
 ;;    setup with exec-drpc
 ;;    wrap functions in taps
 ;;      - how to pass in topology at the end? pass in sink before
 ;;        before compiling query
 ;;      - for time topology should be implicit
-;;    move tridentstate application into the join cascalog type
+
 
 
 ;; TODO: this hasn't yet been tested
@@ -101,6 +111,18 @@
   [op input output]
   (Operation. op input output))
 
+(m/deftridentfn identity-trident-fn
+  [tuple coll]
+  (m/emit-fn coll tuple)
+  (when-let [v (m/vals tuple)]
+    (prn "vals are " v)
+    (apply m/emit-fn coll v)))
+
+(defn rename-fields [stream input output]
+  (prn "rename fields " input " with " output)
+  (-> stream
+      (m/each input identity-trident-fn output)))
+
 (defprotocol IRunner
   (to-generator [item]))
 
@@ -144,13 +166,16 @@
                                                        input
                                                        revised-op
                                                        output)
-                               (m/debug)
-                               )]
+                               (m/debug))]
         {:drpc drpc :topology topology :stream updated-stream})))
 
   TailStruct
   (to-generator [{:keys [node available-fields]}]
-    node))
+    (prn "inside Tailstruct")
+    (let [{:keys [drpc topology stream]} node]
+      (if (instance? TridentState stream)
+        node
+        {:drpc drpc :topology topology :stream (m/project stream available-fields)}))))
 
 (m/deftridentfn
   identity-args
@@ -173,6 +198,14 @@
                      (m/project output))]
       {:drpc nil :topology topology :stream stream}))
 
+  Stream
+  (generator [stream output]
+    (let [input (.getOutputFields stream)
+          updated-stream (-> stream
+                             (m/each input identity-args output)
+                             (m/project output))]
+      {:drpc nil :topology nil :stream updated-stream}))
+  
   TridentTopology
   (generator [topology output]
     (let [local-drpc (LocalDRPC.)
@@ -185,10 +218,12 @@
   ;; These generators act differently than the ones above
   TailStruct
   (generator [sq output]
+    (prn "generator TailStruct " sq output)
     (compile-query sq))
 
   RawSubquery
   (generator [sq output]
+    (prn "generator RawSubquery " sq output)
     (generator (parse/build-rule sq) output)))
 
 
@@ -207,6 +242,7 @@
     (satisfies? IGenerator x))
 
   (generator [_ gen output options]
+    (prn "before generator")
     (generator gen output))
 
   (to-generator [_ x]
