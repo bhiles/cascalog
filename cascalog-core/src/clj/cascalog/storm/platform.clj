@@ -20,8 +20,6 @@
 
 ;; TODO:
 
-;;    Trouble with rename: wraps data into an array?  trims data to
-;;    first letter
 ;;    how to re-use a stream so that it doesn't need to be re-created?
 ;;      - 2 options:
 ;;             1. realize it while parsing <-  A: No good spot
@@ -111,17 +109,14 @@
   [op input output]
   (Operation. op input output))
 
-(m/deftridentfn identity-trident-fn
+(m/deftridentfn identity-args
   [tuple coll]
-  (m/emit-fn coll tuple)
   (when-let [v (m/vals tuple)]
-    (prn "vals are " v)
     (apply m/emit-fn coll v)))
 
 (defn rename-fields [stream input output]
-  (prn "rename fields " input " with " output)
-  (-> stream
-      (m/each input identity-trident-fn output)))
+  (-> stream (m/each input identity-args output)
+      (m/project output)))
 
 (defprotocol IRunner
   (to-generator [item]))
@@ -177,12 +172,6 @@
         node
         {:drpc drpc :topology topology :stream (m/project stream available-fields)}))))
 
-(m/deftridentfn
-  identity-args
-  [tuple coll]
-  (when-let [args (m/first tuple)]
-    (m/emit-fn coll args)))
-
 (defprotocol IGenerator
   (generator [x output]))
 
@@ -194,16 +183,13 @@
   (generator [gen output]
     (let [topology (TridentTopology.)
           stream (-> (m/new-stream topology (u/uuid) gen)
-                     (m/each (.getOutputFields gen) identity-args output)
-                     (m/project output))]
+                     (rename-fields (.getOutputFields gen) output))]
       {:drpc nil :topology topology :stream stream}))
 
   Stream
   (generator [stream output]
-    (let [input (.getOutputFields stream)
-          updated-stream (-> stream
-                             (m/each input identity-args output)
-                             (m/project output))]
+    (let [updated-stream (-> stream
+                             (rename-fields (.getOutputFields stream) output))]
       {:drpc nil :topology nil :stream updated-stream}))
   
   TridentTopology
@@ -211,8 +197,7 @@
     (let [local-drpc (LocalDRPC.)
           drpc-name (u/uuid)
           stream (-> (m/drpc-stream topology drpc-name local-drpc)
-                     (m/each ["args"] identity-args output)
-                     (m/project output))]
+                     (rename-fields ["args"] output))]
       {:drpc [local-drpc drpc-name] :topology topology :stream stream}))
   
   ;; These generators act differently than the ones above
