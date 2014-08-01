@@ -1,24 +1,35 @@
 (ns cascalog.storm.platform
   (:require [cascalog.logic.predicate :as pred]
             [cascalog.logic.platform :refer (compile-query  IPlatform)]
+            [cascalog.logic.platform :as plat]
             [cascalog.logic.parse :as parse]
             [jackknife.core :as u]
             [jackknife.seq :as s]
             [cascalog.logic.def :as d]
             [storm.trident.testing :as tri]
-            [marceline.storm.trident :as m])
+            [marceline.storm.trident :as m]
+            [backtype.storm.testing :as st]
+            [backtype.storm.util :as util]
+            )
   (:import [cascalog.logic.parse TailStruct Projection Application
             FilterApplication Unique Join Grouping Rename]
            [cascalog.logic.predicate Generator RawSubquery]
            [cascalog.logic.def ParallelAggregator ParallelBuffer]
-           [storm.trident.testing FixedBatchSpout MemoryMapState$Factory]
+           [storm.trident.testing FixedBatchSpout MemoryMapState$Factory Split]
+           [storm.trident.operation.builtin Count]
            [storm.trident TridentTopology TridentState Stream]
-           [storm.trident.spout ITridentSpout]
+           [storm.trident.spout ITridentSpout IBatchSpout]
            [cascalog.logic.predicate Operation]
-           [storm.trident.operation.builtin MapGet]
-           [backtype.storm LocalDRPC]))
+           [storm.trident.operation.builtin MapGet TupleCollectionGet]
+           [backtype.storm LocalDRPC LocalCluster]))
 
 ;; TODO:
+
+;;    improve in-memory to wait for completion of feed
+;;       see if feeder-spout with wait will allow premature feed
+;;       see if I can set a wait until topology completion?
+;;           
+;;    potentially pull arrays out and feed them in directly
 
 ;;    how to re-use a stream so that it doesn't need to be re-created?
 ;;      - 2 options:
@@ -158,14 +169,14 @@
             {:drpc drpc :topology topology :stream updated-stream}))
         (let [revised-op (op-storm op)]
           (let [updated-stream (m/each stream input revised-op output)]
-            {:drpc drpc :topology topology :stream updated-stream})))))
+            (merge source {:stream updated-stream}))))))
 
   FilterApplication
   (to-generator [{:keys [source filter]}]
     (let [{:keys [drpc topology stream]} source
           {:keys [op input]} filter
           revised-op (filter-op-storm op)]
-      {:drpc drpc :topology topology :stream (m/each stream input revised-op)}))
+      (merge source {:stream (m/each stream input revised-op)})))
 
   Grouping
   (to-generator [{:keys [source aggregators grouping-fields options]}]
@@ -181,34 +192,60 @@
                                                        revised-op
                                                        output)
                                (m/debug))]
-        {:drpc drpc :topology topology :stream updated-stream})))
+        (merge source {:stream updated-stream}))))
 
   TailStruct
   (to-generator [{:keys [node available-fields]}]
     (let [{:keys [drpc topology stream]} node]
       (if (instance? TridentState stream)
         node
-        {:drpc drpc :topology topology :stream (m/project stream available-fields)}))))
+        (merge node {:stream (m/project stream available-fields)})))))
 
 (defprotocol IGenerator
   (generator [x output]))
 
+(defrecord VectorFeederSpout [spout vals])
+
 (extend-protocol IGenerator
   
   ;; storm generators
+
+  clojure.lang.IPersistentVector
+  (generator [v output]
+    (let [spout (tri/feeder-spout (map #(str % "_spout") output))]
+      (.setWaitToEmit spout false)
+      (generator
+       (VectorFeederSpout. spout v)
+       output)))
+
+  VectorFeederSpout
+  (generator [gen output]
+    (let [topology (TridentTopology.)
+          spout (:spout gen)
+          spout-vals (:vals gen)
+          stream (-> (m/new-stream topology (u/uuid) spout)
+                     (rename-fields (.getOutputFields spout) output))]
+      {:topology topology :stream stream :feeders [gen]}))
   
   ITridentSpout
   (generator [gen output]
     (let [topology (TridentTopology.)
           stream (-> (m/new-stream topology (u/uuid) gen)
                      (rename-fields (.getOutputFields gen) output))]
-      {:drpc nil :topology topology :stream stream}))
+      {:topology topology :stream stream}))
 
+  IBatchSpout
+  (generator [gen output]
+    (let [topology (TridentTopology.)
+          stream (-> (m/new-stream topology (u/uuid) gen)
+                     (rename-fields (.getOutputFields gen) output))]
+      {:topology topology :stream stream}))
+  
   Stream
   (generator [stream output]
     (let [updated-stream (-> stream
                              (rename-fields (.getOutputFields stream) output))]
-      {:drpc nil :topology nil :stream updated-stream}))
+      {:stream updated-stream}))
   
   TridentTopology
   (generator [topology output]
@@ -247,3 +284,32 @@
 
   (to-generator [_ x]
     (to-generator x)))
+
+(defn ??- [tstruct]
+  (let [results (atom nil)]
+    (st/with-local-cluster [cluster]
+      (tri/with-drpc [drpc]
+        (util/letlocals
+         (bind query (plat/compile-query tstruct))
+         (bind stream (:stream query))
+         (bind topo (:topology query))
+         (bind feeders (:feeders query))
+         (bind output-fields (:available-fields tstruct))
+         (bind drpc-name (u/uuid))
+         (-> (m/drpc-stream topo drpc-name drpc)
+             (m/broadcast)
+             (m/state-query stream
+                            ["args"]
+                            (TupleCollectionGet.)
+                            output-fields)
+             (m/project output-fields))      
+         (tri/with-topology [cluster topo]
+           (doseq [{:keys [spout vals]} feeders]
+             (tri/feed spout vals))
+           (reset! results (tri/exec-drpc drpc drpc-name ""))))))
+    @results))
+
+(defmacro ??<- [& sq]
+  `(let [tstruct# (parse/<- ~@sq)]
+     (??- tstruct#)))
+
