@@ -17,14 +17,11 @@
            [cascalog.logic.def ParallelAggregator ParallelBuffer]
            [storm.trident.testing FixedBatchSpout MemoryMapState$Factory Split]
            [storm.trident.operation.builtin Count]
-           [storm.trident.operation Function]
            [storm.trident TridentTopology TridentState Stream]
            [storm.trident.spout ITridentSpout IBatchSpout]
            [cascalog.logic.predicate Operation]
            [storm.trident.operation.builtin MapGet TupleCollectionGet]
-           [backtype.storm LocalDRPC LocalCluster])
-  (:refer-clojure :exclude [get])
-  )
+           [backtype.storm LocalDRPC LocalCluster]))
 
 ;; TODO:
 
@@ -75,58 +72,23 @@
          ([t1# t2#] (~combine-var t1# t2#)))
        ~fn-name)))
 
-(defmacro mk-mapcat-tridentfn
+(defn mk-mapcat-tridentfn
   [op]
-  (let [fn-name (symbol (u/uuid))]
-    `(do (m/deftridentfn ~fn-name
-           [tuple# coll#]
-           (when-let [args# (m/first tuple#)]
-             (let [results# (~op args#)]
-               (doseq [result# results#]
-                 (m/emit-fn coll# result#)))))
-         ~fn-name)))
+  (let [fn-name (gensym "mapcattridentfn")]
+    (intern *ns* fn-name (fn []
+                           (fn [conf context]
+                             (reify storm.trident.operation.Function
+                               (execute [_ tuple coll]
+                                 (when-let [args (m/first tuple)]
+                                   (let [results (op args)]
+                                     (doseq [result results]
+                                       (m/emit-fn coll result)))))))))
+    (let [my-var (ns-resolve *ns* fn-name)]
+      (m/clojure-tridentfn* my-var []))))
 
-(defmacro mk-map-tridentfn
+(defn mk-map-tridentfn
   [op]
-  (let [fn-name (gensym "def")]
-    `(do (m/deftridentfn ~fn-name
-           [tuple# coll#]
-           (when-let [args# (m/first tuple#)]
-             (let [result# (~op args#)]
-               (m/emit-fn coll# result#))))
-         ~fn-name)))
-
-(defmacro mk-map-tridentfn-c
-  [op]
-  (let [fn-name (gensym "mno")]
-    `(m/deftridentfn ~fn-name
-       [tuple# coll#]
-       (when-let [args# (m/first tuple#)]
-         (let [result# (~op args#)]
-           (m/emit-fn coll# result#))))))
-
-(defn mk-map-tridentfn-2
-  [op]
-  (let [fn-name (u/uuid)]
-    `(m/deftridentfn ~(gensym "abc")
-       [tuple# coll#]
-       (when-let [args# (m/first tuple#)]
-         (let [result# (~op args#)]
-           (m/emit-fn coll# result#))))))
-
-(defn mk-map-tridentfn-5
-  [op]
-  (let [fn-name (u/uuid)]
-    `(m/deftridentfn ~(gensym "abc") {:prepare true}
-      [tuple# coll#]
-      (m/emit-fn coll# (~op 1)
-                 )
-      )))
-
-
-(defn tfn
-  [op]
-  (let [fn-name (gensym "tridentfn")]
+  (let [fn-name (gensym "maptridentfn")]
     (intern *ns* fn-name (fn []
                            (fn [conf context]
                              (reify storm.trident.operation.Function
@@ -138,27 +100,7 @@
       (m/clojure-tridentfn* my-var []))))
 
 
-(defmacro mk-map-tridentfn-b
-  [name op]
-  `(m/deftridentfn ~~name
-     [tuple# coll#]
-     (when-let [args# (m/first tuple#)]
-       (let [result# (~op args#)]
-         (m/emit-fn coll# result#)))))
-
-(defmacro mk-map-tridentfn-b-2
-  [name op]
-  (let [name2 (gensym name)]
-    `(mk-map-tridentfn-b ~name2 ~op))
-  )
-
-
-(defmacro mk-map-tridentfn-3
-  [op]
-  (mk-map-tridentfn-2 op )
-  )
-
-(defmacro mk-filterfn
+(defmacro mk-filterfn-old
   [op]
   (let [fn-name (symbol (u/uuid))]
     `(do (m/deffilter ~fn-name
@@ -169,56 +111,18 @@
              false))
          ~fn-name)))
 
-
-(defmacro mk-2-fn [name]
-  `(defn ~name [] 2))
-
-
-(def ^:dynamic *fn-name* (gensym "abc"))
-
-
-(defmulti my-multi-2
-  (fn [name]
-    (type name)))
-
-(defmethod my-multi-2 :default
-  [name]
-  (alter-var-root #'*fn-name* (constantly (gensym "def")))
-  (mk-2-fn *fn-name*))
-
-
-
-(defmacro mk-1-fn [name]
-  `(defn ~(gensym name) [] 1))
-
-
-;; This can be my question online
-(defmulti my-multi
-  (fn [name]
-    (type name)))
-
-(defmethod my-multi :default
-  [name]
-  (mk-1-fn name))
-
-(defmulti test-op-storm
-  (fn [name op]
-    (type op)))
-
-;; end of question
-
-(defmethod test-op-storm :default
-  [name op]
-  (let [n (gensym "xyz")]
-    ;;(mk-map-tridentfn-b-2 n +)
-    ;;(mk-map-tridentfn-c op)
-    (tfn op)
-    )
-  )
-
-(defn whatever [name]
-  `(defn  ~(symbol name) []
-     (prn "hi")))
+(defn mk-filterfn
+  [op]
+  (let [fn-name (gensym "filterfn")]
+    (intern *ns* fn-name (fn []
+                           (fn [conf context]
+                             (reify storm.trident.operation.Filter
+                               (isKeep [_ tuple]
+                                 (if-let [args (m/first tuple)]
+                                   (op args)
+                                   false))))))
+    (let [my-var (ns-resolve *ns* fn-name)]
+      (m/clojure-filter* my-var []))))
 
 (defmulti op-storm
   (fn [op]
@@ -226,25 +130,11 @@
 
 (defmethod op-storm ::d/map
   [op]
-  (let [n "abc"]
-    ;;
-;;    (var-get (eval (mk-map-tridentfn-2 op)))
-    ;;(var-get (load-string (pr-str (mk-map-tridentfn-5 op))))
-    ;;(var-get (eval (mk-map-tridentfn-5 op)))
-    ;;(mk-map-tridentfn op)
-    ;;(var-get (eval (mk-map-tridentfn-5 op)))
-    (tfn op)
-    ))
+  (mk-map-tridentfn op))
 
 (defmethod op-storm ::d/mapcat
   [op]
   (mk-mapcat-tridentfn op))
-
-(defmethod op-storm :default
-  [op]
-  ;;(var-get (eval (mk-map-tridentfn-2 op)))
-  (mk-map-tridentfn op)
-  )
 
 (defn filter-op-storm
   [op]

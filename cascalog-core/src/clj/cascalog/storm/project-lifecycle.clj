@@ -68,9 +68,11 @@
 
 (defn test-topo []
   (api/<- [?w2]
-          (my-spout ?w)
+          (my-spout ?l)
+          ((api/mapcatfn [x] (clojure.string/split x #" ")) ?l :> ?w)
           ((api/mapfn [x] (str x "!!!")) ?w :> ?w2)
           ((api/mapfn [x] (str x "???")) ?w2 :> ?w3)
+          ((api/filterfn [x] (= "hi" x)) ?w)
           ))
 
 (def query (plat/compile-query (test-topo)))
