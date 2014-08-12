@@ -29,8 +29,10 @@
                  [com.twitter/maple "0.2.2"]
                  [jackknife "0.1.6"]
                  [hadoop-util "0.3.0"]
-                 [yieldbot/marceline "0.2.0"]
-                 [org.apache.storm/storm-core "0.9.2-incubating"]]
+                 [yieldbot/marceline "0.2.3-SNAPSHOT"]
+                 [org.apache.storm/storm-core "0.9.2-incubating"]
+                 [org.clojure/data.json "0.2.5"]
+                 [clj-time "0.8.0"]]
   :profiles {:1.3 {:dependencies [[org.clojure/clojure "1.3.0"]]}
              :1.4 {:dependencies [[org.clojure/clojure "1.4.0"]]}
              :1.5 {:dependencies [[org.clojure/clojure "1.5.1"]]}
