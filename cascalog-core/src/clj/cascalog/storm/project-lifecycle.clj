@@ -73,9 +73,10 @@
           ((api/mapfn [x] (str x "!!!")) ?w :> ?w2)
           ((api/mapfn [x] (str x "???")) ?w2 :> ?w3)
           ((api/filterfn [x] (= "hi" x)) ?w)
+          (ops/count ?w :> ?count)
           ))
 
-(def query (plat/compile-query (test-topo)))
+ (def query (plat/compile-query (test-topo)))
 
 ;; test to see that the name is the same:
 ;; (take 2 (repeatedly #(splat/mk-map-tridentfn "abc" + "a" "b")))

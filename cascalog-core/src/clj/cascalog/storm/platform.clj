@@ -51,7 +51,8 @@
 ;;   enable inline parameters like (= ?pronoun "the")
 ;;      trouble with parsing "the" since it doesn't appear in the stream
 
-;; TODO: this hasn't yet been tested
+;; TODO: this hasn't yet been tested and it uses the old single
+;; implementation style
 (defmacro mk-aggregator
   [op]
   (let [fn-name (symbol (u/uuid))]
@@ -62,15 +63,16 @@
          ([state# coll#] (m/emit-fn coll# (~op state#))))
        ~fn-name)))
 
-(defmacro mk-combineraggregator
+(defn mk-combineraggregator
   [init-var combine-var present-var]
-  (let [fn-name (symbol (u/uuid))]
-    `(do
-       (m/defcombineraggregator ~fn-name
-         ([] nil)
-         ([tuple#] (~init-var))
-         ([t1# t2#] (~combine-var t1# t2#)))
-       ~fn-name)))
+  (let [fn-name (gensym "combineaggregator")]
+    (intern *ns* fn-name (fn []
+                           (reify storm.trident.operation.CombinerAggregator
+                             (zero [_] nil)
+                             (init [_ tuple] (init-var))
+                             (combine [_ t1 t2] (combine-var t1 t2)))))
+    (let [my-var (ns-resolve *ns* fn-name)]
+      (m/clojure-combiner-aggregator* my-var []))))
 
 (defn mk-mapcat-tridentfn
   [op]
@@ -151,7 +153,8 @@
 (defmethod agg-op-storm ParallelAggregator
   [op]
   (let [ {:keys [init-var combine-var present-var]} op]
-       (mk-combineraggregator init-var combine-var present-var)))
+    (prn "inside aggregator ...yay!")
+    (mk-combineraggregator init-var combine-var present-var)))
 
 ;; Extending to-predicate functions to allow for additional types of
 ;; operations
@@ -218,7 +221,8 @@
                                (m/persistent-aggregate (MemoryMapState$Factory.)
                                                        input
                                                        revised-op
-                                                       output))]
+                                                       output)
+                               (m/debug))]
         (merge source {:stream updated-stream}))))
 
   TailStruct
