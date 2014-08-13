@@ -94,42 +94,97 @@
           ))
 
 
-(defn json-stream []
+(def json-stream
   (api/<- [?json]
           (my-spout ?line)
           ((api/mapfn [t]
                       (json/read-str t)) ?line :> ?json)))
 
-(def json-query (plat/compile-query (json-stream)))
+(def json-query (plat/compile-query json-stream))
 (def json-stream (:stream json-query))
 
-
-(def create-repos-2
-  (api/<- [?repo_name ?created_at ?login !repo_lang]
+(def repo-existence
+  (api/<- [?repo_name ?count]
           (json-stream ?json2)
-          ((api/filterfn [json]
-                         (and (= (get json "type") "CreateEvent")
-                                     (= (-> ( get json "payload") (get "ref_type")) "repository")
-                                     )) ?json2)          
+          ((api/filterfn [json] (and (= (get json "type") "CreateEvent")
+                                     (= (-> ( get json "payload") (get "ref_type"))
+                                        "repository")))
+           ?json2)
+          ((api/mapfn [json]
+                       (let [repo (get json "repository")
+                             repo_name (str (get repo "owner") "/" (get repo "name"))]
+                         repo_name))
+           ?json2 :> ?repo_name)
+          (ops/count ?repo_name :> ?count)))
+
+(def repo-existence-query (plat/compile-query repo-existence))
+
+(def stars
+  (api/<- [?repo_name ?created_at ?login]
+          (json-stream ?json2)
+          ((api/filterfn [json] (= (get json "type") "WatchEvent")) ?json2)          
           ((api/mapfn [json]
                        (let [login (-> (get json "actor_attributes")
                                        (get "login"))
                              created_at (get json "created_at")
                              repo (get json "repository")
-                             repo_name (str (get repo "owner") "/" (get repo "name"))
-                             repo_lang (get repo "language")]
-                         [login created_at repo_name repo_lang]
+                             repo_name (str (get repo "owner") "/" (get repo "name"))]
+                         [repo_name created_at login]
                          ))
-           ?json2 :> ?login ?created_at ?repo_name !repo_lang)
+           ?json2 :> ?repo_name ?created_at ?login)
           ))
 
-(def query (plat/compile-query create-repos-2))
+(api/defmapfn iso->day
+  [iso-date]
+  (time/unparse (time/formatter "yyyy-MM-dd")
+                (time/parse (time/formatters :date-time-parser)
+                            iso-date)))
+
+(def stars-query (plat/compile-query stars))
+(def stars-stream (:stream stars-query))
+
+(def stars-over-time
+  (api/<- [?repo_name2 ?day ?star_count]
+          (stars-stream ?repo_name2 ?star_created_at2 _)
+          (iso->day ?star_created_at2 :> ?day)
+          (ops/count :> ?star_count)))
+
+(plat/compile-query stars-over-time)
+
+(def stars-totals
+  (api/<- [?repo_name2 ?star_count]
+          (stars-stream ?repo_name2 _ _)
+          (ops/count :> ?star_count)))
+
+(plat/compile-query stars-totals)
+
+(comment (def create-repos-2
+           (api/<- [?repo_name ?created_at ?login !repo_lang]
+                   (json-stream ?json2)
+                   ((api/filterfn [json]
+                                  (and (= (get json "type") "CreateEvent")
+                                       (= (-> ( get json "payload") (get "ref_type")) "repository")
+                                       )) ?json2)          
+                   ((api/mapfn [json]
+                               (let [login (-> (get json "actor_attributes")
+                                               (get "login"))
+                                     created_at (get json "created_at")
+                                     repo (get json "repository")
+                                     repo_name (str (get repo "owner") "/" (get repo "name"))
+                                     repo_lang (get repo "language")]
+                                 [login created_at repo_name repo_lang]
+                                 ))
+                    ?json2 :> ?login ?created_at ?repo_name !repo_lang)
+                   )))
+
+;;(def repo-existence-query (plat/compile-query repo-existence-state))
+;;(def repo-query (plat/compile-query create-repos-2))
 
 (defn run! []
    (def cluster (LocalCluster.))
   ;;(.submitTopology cluster "wordcounter" {} (.build (build-topology my-spout)))
    (.submitTopology cluster "wordcounter" {} (.build (:topology json-query)))
    ;;(tri/feed my-spout [["hi"]])
-   ;; (feed-spout-file! my-spout "/Users/bennetthiles/src/github-data-challenge/resources/github/test.json")
+   (feed-spout-file! my-spout "/Users/bennetthiles/src/github-data-challenge/resources/github/test.json")
    
 )

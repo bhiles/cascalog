@@ -202,7 +202,8 @@
                                (m/persistent-aggregate (MemoryMapState$Factory.)
                                                        input
                                                        revised-op
-                                                       output))]
+                                                       output)
+                               (m/debug))]
         (merge source {:stream updated-stream}))))
 
   TailStruct
@@ -210,8 +211,7 @@
     (let [{:keys [drpc topology stream]} node]
       (if (instance? TridentState stream)
         node
-        (merge node {:stream (-> (m/project stream available-fields)
-                                 (m/debug))})))))
+        (merge node {:stream (-> (m/project stream available-fields))})))))
 
 (defprotocol IGenerator
   (generator [x output]))
