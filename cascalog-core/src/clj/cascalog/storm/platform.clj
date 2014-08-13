@@ -179,9 +179,13 @@
   (to-generator [{:keys [source operation]}]
     (let [{:keys [drpc topology stream]} source
           {:keys [op input output]} operation]
-      (let [revised-op (op-storm op)]
-        (let [updated-stream (-> (m/each stream input revised-op output))]
-          (merge source {:stream updated-stream})))))
+      (if (instance? TridentState op)
+        (do
+          (let [updated-stream (m/state-query stream op input (MapGet.) output)]
+            (merge source {:stream updated-stream})))        
+        (do (let [revised-op (op-storm op)]
+              (let [updated-stream (-> (m/each stream input revised-op output))]
+                (merge source {:stream updated-stream})))))))
 
   FilterApplication
   (to-generator [{:keys [source filter]}]
@@ -194,17 +198,22 @@
   (to-generator [{:keys [source aggregators grouping-fields options]}]
     (let [{:keys [drpc topology stream]} source
           {:keys [op input output]} (first aggregators)]
-      ;; TODO: need to handle multiple aggregators use chained agg
-      (let [revised-op (agg-op-storm op)
-            revised-grouping-fields (if (empty? grouping-fields) input grouping-fields)
-            updated-stream (-> stream
-                               (m/group-by revised-grouping-fields)
-                               (m/persistent-aggregate (MemoryMapState$Factory.)
-                                                       input
-                                                       revised-op
-                                                       output)
-                               (m/debug))]
-        (merge source {:stream updated-stream}))))
+      (if (instance? TridentState op)
+        (do
+          (let [updated-stream (m/state-query stream op input (MapGet.) output)]
+            (merge source {:stream updated-stream})))        
+        ;; TODO: need to handle multiple aggregators use chained agg
+        (do
+          (let [revised-op (agg-op-storm op)
+                revised-grouping-fields (if (empty? grouping-fields) input grouping-fields)
+                updated-stream (-> stream
+                                   (m/group-by revised-grouping-fields)
+                                   (m/persistent-aggregate (MemoryMapState$Factory.)
+                                                           input
+                                                           revised-op
+                                                           output)
+                                   (m/debug))]
+            (merge source {:stream updated-stream}))))))
 
   TailStruct
   (to-generator [{:keys [node available-fields]}]
@@ -217,6 +226,7 @@
   (generator [x output]))
 
 (defrecord VectorFeederSpout [spout vals])
+(defrecord DRPCStateTap [state topology])
 
 (extend-protocol IGenerator
   
@@ -265,6 +275,19 @@
           drpc-name (u/uuid)
           stream (-> (m/drpc-stream topology drpc-name local-drpc)
                      (rename-fields ["args"] output))]
+      {:drpc [local-drpc drpc-name] :topology topology :stream stream}))
+
+  DRPCStateTap
+  (generator [tap output]
+    (let [{:keys [state topology]} tap
+          local-drpc (LocalDRPC.)
+          drpc-name (u/uuid)
+          stream (-> (m/drpc-stream topology drpc-name local-drpc)
+                     (m/broadcast)
+                     (m/state-query state
+                                    ["args"]
+                                    (TupleCollectionGet.)
+                                    output))]
       {:drpc [local-drpc drpc-name] :topology topology :stream stream}))
   
   ;; These generators act differently than the ones above

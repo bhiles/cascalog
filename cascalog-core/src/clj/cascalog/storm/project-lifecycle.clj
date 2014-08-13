@@ -14,7 +14,7 @@
             [marceline.storm.trident :as m]
             [backtype.storm.clojure :refer (to-spec normalize-fns)])
   (:import [cascalog.ops IdentityBuffer]
-           [cascalog.storm.platform StormPlatform]
+           [cascalog.storm.platform StormPlatform DRPCStateTap]
            [storm.trident TridentTopology TridentState Stream]
            [backtype.storm LocalDRPC LocalCluster]
            [marceline.storm.trident.clojure ClojureFunction]))
@@ -122,7 +122,7 @@
 (def stars
   (api/<- [?repo_name ?created_at ?login]
           (json-stream ?json2)
-          ((api/filterfn [json] (= (get json "type") "WatchEvent")) ?json2)          
+
           ((api/mapfn [json]
                        (let [login (-> (get json "actor_attributes")
                                        (get "login"))
@@ -156,29 +156,23 @@
           (stars-stream ?repo_name2 _ _)
           (ops/count :> ?star_count)))
 
-(plat/compile-query stars-totals)
+(def stars-totals-query (plat/compile-query stars-totals))
+(def stars-totals-state (:stream stars-totals-query))
 
-(comment (def create-repos-2
-           (api/<- [?repo_name ?created_at ?login !repo_lang]
-                   (json-stream ?json2)
-                   ((api/filterfn [json]
-                                  (and (= (get json "type") "CreateEvent")
-                                       (= (-> ( get json "payload") (get "ref_type")) "repository")
-                                       )) ?json2)          
-                   ((api/mapfn [json]
-                               (let [login (-> (get json "actor_attributes")
-                                               (get "login"))
-                                     created_at (get json "created_at")
-                                     repo (get json "repository")
-                                     repo_name (str (get repo "owner") "/" (get repo "name"))
-                                     repo_lang (get repo "language")]
-                                 [login created_at repo_name repo_lang]
-                                 ))
-                    ?json2 :> ?login ?created_at ?repo_name !repo_lang)
-                   )))
+(def repo-existence-state (:stream repo-existence-query))
 
-;;(def repo-existence-query (plat/compile-query repo-existence-state))
-;;(def repo-query (plat/compile-query create-repos-2))
+(def drpc-repo-existence-tap (DRPCStateTap. repo-existence-state
+                                            (:topology json-query)))
+
+(def drpc-existing-repo-total-count
+  (api/<- [?repo_name3 ?total_star_count ]
+          (drpc-repo-existence-tap ?repo_name3 _)
+          (stars-totals-state ?repo_name3 :> ?total_star_count)
+          ((api/filterfn [val] (not (nil? val))) ?total_star_count)))
+
+(def total-count-query (plat/compile-query drpc-existing-repo-total-count))
+(def drpc-total-count (:drpc total-count-query))
+;; (tri/exec-drpc (first drpc-total-count) (second drpc-total-count) "")
 
 (defn run! []
    (def cluster (LocalCluster.))
