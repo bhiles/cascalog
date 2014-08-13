@@ -84,7 +84,7 @@
                                  (when-let [args (m/first tuple)]
                                    (let [results (op args)]
                                      (doseq [result results]
-                                       (m/emit-fn coll result)))))))))
+                                       (apply m/emit-fn coll (s/collectify result))))))))))
     (let [my-var (ns-resolve *ns* fn-name)]
       (m/clojure-tridentfn* my-var []))))
 
@@ -97,21 +97,9 @@
                                (execute [_ tuple coll]
                                  (when-let [args (m/first tuple)]
                                    (let [result (op args)]
-                                     (m/emit-fn coll result))))))))
+                                     (apply m/emit-fn coll (s/collectify result)))))))))
     (let [my-var (ns-resolve *ns* fn-name)]
       (m/clojure-tridentfn* my-var []))))
-
-
-(defmacro mk-filterfn-old
-  [op]
-  (let [fn-name (symbol (u/uuid))]
-    `(do (m/deffilter ~fn-name
-           [tuple#]
-           (prn "filte tuple is " tuple#)
-           (if-let [args# (m/first tuple#)]
-             (~op args#)
-             false))
-         ~fn-name)))
 
 (defn mk-filterfn
   [op]
@@ -153,7 +141,6 @@
 (defmethod agg-op-storm ParallelAggregator
   [op]
   (let [ {:keys [init-var combine-var present-var]} op]
-    (prn "inside aggregator ...yay!")
     (mk-combineraggregator init-var combine-var present-var)))
 
 ;; Extending to-predicate functions to allow for additional types of
@@ -172,7 +159,6 @@
     (apply m/emit-fn coll v)))
 
 (defn rename-fields [stream input output]
-  (prn "rename input " input " and output " output)
   (-> stream (m/each input identity-args output)
       (m/project output)))
 
@@ -193,12 +179,8 @@
   (to-generator [{:keys [source operation]}]
     (let [{:keys [drpc topology stream]} source
           {:keys [op input output]} operation]
-      (prn "applying application with op " op " and input " input " and out" output)
       (let [revised-op (op-storm op)]
-        (prn "revised op is " revised-op)
-        (let [updated-stream (-> (m/each stream input revised-op output)
-                                 (m/debug))]
-          (prn "op function yields: " (op "abc"))
+        (let [updated-stream (-> (m/each stream input revised-op output))]
           (merge source {:stream updated-stream})))))
 
   FilterApplication
@@ -206,7 +188,6 @@
     (let [{:keys [drpc topology stream]} source
           {:keys [op input]} filter
           revised-op (filter-op-storm op)]
-      (prn "applying filter " op " with input " input)
       (merge source {:stream (m/each stream input revised-op)})))
 
   Grouping
@@ -221,8 +202,7 @@
                                (m/persistent-aggregate (MemoryMapState$Factory.)
                                                        input
                                                        revised-op
-                                                       output)
-                               (m/debug))]
+                                                       output))]
         (merge source {:stream updated-stream}))))
 
   TailStruct
@@ -230,7 +210,8 @@
     (let [{:keys [drpc topology stream]} node]
       (if (instance? TridentState stream)
         node
-        (merge node {:stream (m/project stream available-fields)})))))
+        (merge node {:stream (-> (m/project stream available-fields)
+                                 (m/debug))})))))
 
 (defprotocol IGenerator
   (generator [x output]))

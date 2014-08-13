@@ -10,6 +10,7 @@
             [cascalog.storm.platform :as splat]
             [storm.trident.testing :as tri]
             [jackknife.core :as u]
+            [jackknife.seq :as s]
             [marceline.storm.trident :as m]
             [backtype.storm.clojure :refer (to-spec normalize-fns)])
   (:import [cascalog.ops IdentityBuffer]
@@ -76,17 +77,8 @@
           (ops/count ?w :> ?count)
           ))
 
- (def query (plat/compile-query (test-topo)))
-
 ;; test to see that the name is the same:
 ;; (take 2 (repeatedly #(splat/mk-map-tridentfn "abc" + "a" "b")))
-
-(defn run! []
-   (def cluster (LocalCluster.))
-  ;;(.submitTopology cluster "wordcounter" {} (.build (build-topology my-spout)))
-   (.submitTopology cluster "wordcounter" {} (.build (:topology query)))
-   (tri/feed my-spout [["hi"]])
-)
 
 (defn create-repos []
   (api/<- [?json]
@@ -101,19 +93,25 @@
                                      )) ?json)          
           ))
 
-(defn create-repos-2 []
-  (api/<- [?repo_name ?created_at ?login !repo_lang]
+
+(defn json-stream []
+  (api/<- [?json]
           (my-spout ?line)
           ((api/mapfn [t]
-                      (prn "text is " t)
-                      (json/read-str t)) ?line :> ?json)
+                      (json/read-str t)) ?line :> ?json)))
+
+(def json-query (plat/compile-query (json-stream)))
+(def json-stream (:stream json-query))
+
+
+(def create-repos-2
+  (api/<- [?repo_name ?created_at ?login !repo_lang]
+          (json-stream ?json2)
           ((api/filterfn [json]
-                         (prn "json is " json )
                          (and (= (get json "type") "CreateEvent")
                                      (= (-> ( get json "payload") (get "ref_type")) "repository")
-                                     )) ?json)          
+                                     )) ?json2)          
           ((api/mapfn [json]
-                      (prn "json type is " (type json))
                        (let [login (-> (get json "actor_attributes")
                                        (get "login"))
                              created_at (get json "created_at")
@@ -122,7 +120,16 @@
                              repo_lang (get repo "language")]
                          [login created_at repo_name repo_lang]
                          ))
-           ?json :> ?login ?created_at ?repo_name !repo_lang)
+           ?json2 :> ?login ?created_at ?repo_name !repo_lang)
           ))
 
+(def query (plat/compile-query create-repos-2))
 
+(defn run! []
+   (def cluster (LocalCluster.))
+  ;;(.submitTopology cluster "wordcounter" {} (.build (build-topology my-spout)))
+   (.submitTopology cluster "wordcounter" {} (.build (:topology json-query)))
+   ;;(tri/feed my-spout [["hi"]])
+   ;; (feed-spout-file! my-spout "/Users/bennetthiles/src/github-data-challenge/resources/github/test.json")
+   
+)
