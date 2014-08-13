@@ -16,10 +16,10 @@
            [cascalog.logic.predicate Generator RawSubquery]
            [cascalog.logic.def ParallelAggregator ParallelBuffer]
            [storm.trident.testing FixedBatchSpout MemoryMapState$Factory Split]
-           [storm.trident.operation.builtin Count]
+           [storm.trident.operation.builtin Count FirstN]
            [storm.trident TridentTopology TridentState Stream]
            [storm.trident.spout ITridentSpout IBatchSpout]
-           [cascalog.logic.predicate Operation]
+           [cascalog.logic.predicate Operation FilterOperation]
            [storm.trident.operation.builtin MapGet TupleCollectionGet]
            [backtype.storm LocalDRPC LocalCluster]))
 
@@ -53,7 +53,7 @@
 
 ;; TODO: this hasn't yet been tested and it uses the old single
 ;; implementation style
-(defmacro mk-aggregator
+(defmacro mk-aggregator-2
   [op]
   (let [fn-name (symbol (u/uuid))]
     `(do
@@ -63,9 +63,34 @@
          ([state# coll#] (m/emit-fn coll# (~op state#))))
        ~fn-name)))
 
+(defn mk-aggregator
+  [op]
+  (let [fn-name (gensym "aggregator")]
+    (intern *ns* fn-name (fn []
+                           (fn [conf context]
+                             (reify storm.trident.operation.Aggregator
+                               (init [_ batch-id coll] (apply m/emit-fn coll (s/collectify (op))))
+                               (aggregate [_ state tuple coll]
+                                 (apply m/emit-fn coll (s/collectify (op state tuple))))
+                               (complete [_ state coll] (apply m/emit-fn coll (s/collectify (op state))))))))
+    (let [my-var (ns-resolve *ns* fn-name)]
+      (m/clojure-aggregator* my-var []))))
+
+(defn mk-reduceraggregator
+  [op]
+  (let [fn-name (gensym "reduceraggregator")]
+    (intern *ns* fn-name (fn []
+                           (reify storm.trident.operation.ReducerAggregator
+                             (init [_] (op))
+                             (reduce [_ state tuple]
+                               (when-let [v (into [] (m/vals tuple))]
+                                 (op state v))))))
+    (let [my-var (ns-resolve *ns* fn-name)]
+      (m/clojure-reducer-aggregator* my-var []))))
+
 (defn mk-combineraggregator
   [init-var combine-var present-var]
-  (let [fn-name (gensym "combineaggregator")]
+  (let [fn-name (gensym "combineraggregator")]
     (intern *ns* fn-name (fn []
                            (reify storm.trident.operation.CombinerAggregator
                              (zero [_] nil)
@@ -130,13 +155,17 @@
   [op]
   (mk-filterfn op))
 
+(defmethod pred/to-predicate FirstN
+  [op input output]
+  (FilterOperation. op input))
+
 (defmulti agg-op-storm
   (fn [op]
     (type op)))
 
 (defmethod agg-op-storm ::d/aggregate
   [op]
-  (mk-aggregator op))
+  (mk-reduceraggregator op))
 
 (defmethod agg-op-storm ParallelAggregator
   [op]
@@ -192,7 +221,9 @@
     (let [{:keys [drpc topology stream]} source
           {:keys [op input]} filter
           revised-op (filter-op-storm op)]
-      (merge source {:stream (m/each stream input revised-op)})))
+      (if (instance? FirstN op)
+        (merge source {:stream (.applyAssembly stream op)})
+        (merge source {:stream (m/each stream input revised-op)}))))
 
   Grouping
   (to-generator [{:keys [source aggregators grouping-fields options]}]
@@ -203,17 +234,31 @@
           (let [updated-stream (m/state-query stream op input (MapGet.) output)]
             (merge source {:stream updated-stream})))        
         ;; TODO: need to handle multiple aggregators use chained agg
-        (do
-          (let [revised-op (agg-op-storm op)
-                revised-grouping-fields (if (empty? grouping-fields) input grouping-fields)
+        ;; TODO: I don't think you can apply partitionAggregate to a
+        ;; DRPC call
+        (if (and (= (type op) ::d/aggregate)
+                 (not (empty? drpc)))
+          (do
+            (let [revised-op (agg-op-storm op)
+                  revised-grouping-fields (if (empty? grouping-fields)
+                                            input grouping-fields)
                 updated-stream (-> stream
                                    (m/group-by revised-grouping-fields)
-                                   (m/persistent-aggregate (MemoryMapState$Factory.)
-                                                           input
-                                                           revised-op
-                                                           output)
+                                   (m/aggregate input revised-op output)
                                    (m/debug))]
-            (merge source {:stream updated-stream}))))))
+            (merge source {:stream updated-stream})))
+          (do
+            (let [revised-op (agg-op-storm op)
+                  revised-grouping-fields (if (empty? grouping-fields)
+                                            input grouping-fields)
+                  updated-stream (-> stream
+                                     (m/group-by revised-grouping-fields)
+                                     (m/persistent-aggregate (MemoryMapState$Factory.)
+                                                             input
+                                                             revised-op
+                                                             output)
+                                     (m/debug))]
+              (merge source {:stream updated-stream})))))))
 
   TailStruct
   (to-generator [{:keys [node available-fields]}]

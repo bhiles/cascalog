@@ -12,6 +12,7 @@
             [jackknife.core :as u]
             [jackknife.seq :as s]
             [marceline.storm.trident :as m]
+            [marceline.storm.builtin :as mops]
             [backtype.storm.clojure :refer (to-spec normalize-fns)])
   (:import [cascalog.ops IdentityBuffer]
            [cascalog.storm.platform StormPlatform DRPCStateTap]
@@ -143,13 +144,22 @@
 (def stars-query (plat/compile-query stars))
 (def stars-stream (:stream stars-query))
 
+(api/defaggregatefn merge-day-vals
+  ([] {})
+  ([state tuple]
+     (let [[day] tuple
+           m {day 1}]
+       (merge-with + state m)))
+  ([state] [state]))
+
 (def stars-over-time
-  (api/<- [?repo_name2 ?day ?star_count]
+  (api/<- [?repo_name2 ?merged_day_count]
           (stars-stream ?repo_name2 ?star_created_at2 _)
           (iso->day ?star_created_at2 :> ?day)
-          (ops/count :> ?star_count)))
+          (merge-day-vals ?day :> ?merged_day_count)))
 
-(plat/compile-query stars-over-time)
+(def stars-time-query (plat/compile-query stars-over-time))
+(def stars-time-state (:stream stars-time-query))
 
 (def stars-totals
   (api/<- [?repo_name2 ?star_count]
@@ -164,11 +174,36 @@
 (def drpc-repo-existence-tap (DRPCStateTap. repo-existence-state
                                             (:topology json-query)))
 
+(def drpc-stars-time-tap (DRPCStateTap. stars-time-state
+                                            (:topology json-query)))
+
+
+(def drpc-existing-repo-total-count-2
+  (api/<- [?repo_name3 ?merged_day_count ]
+          (drpc-stars-time-tap ?repo_name3 ?day2 ?day_star_count2)        
+          (merge-day-vals ?day2 ?day_star_count2 :> ?merged_day_count)))
+
+
+(comment
+  ;; after this function, we need to mapcat the output into it's
+  ;; output values
+  (api/defaggregatefn first-10
+           ([] [])
+           ([state tuple]
+              (let [max-size 10
+                    new-state (reverse (sort (cons (first tuple) state)))]
+                (if (> (count new-state) max-size)
+                  (take max-size new-state)
+                  new-state)))
+           ([state] [state])))
+
+
 (def drpc-existing-repo-total-count
-  (api/<- [?repo_name3 ?total_star_count ]
+  (api/<- [?repo_name3 ?total_star_count ?day_counts]
           (drpc-repo-existence-tap ?repo_name3 _)
           (stars-totals-state ?repo_name3 :> ?total_star_count)
-          ((api/filterfn [val] (not (nil? val))) ?total_star_count)))
+          (stars-time-state ?repo_name3 :> ?day_counts)
+          ((mops/first-n 10 "?total_star_count" true) :< ?total_star_count)))
 
 (def total-count-query (plat/compile-query drpc-existing-repo-total-count))
 (def drpc-total-count (:drpc total-count-query))
