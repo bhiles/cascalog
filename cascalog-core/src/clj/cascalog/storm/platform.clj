@@ -3,6 +3,7 @@
             [cascalog.logic.platform :refer (compile-query  IPlatform)]
             [cascalog.logic.platform :as plat]
             [cascalog.logic.parse :as parse]
+            [cascalog.logic.vars :as v]
             [jackknife.core :as u]
             [jackknife.seq :as s]
             [cascalog.logic.def :as d]
@@ -126,15 +127,25 @@
     (let [my-var (ns-resolve *ns* fn-name)]
       (m/clojure-tridentfn* my-var []))))
 
+(defn select-fields-w-default
+  [fields tuple]
+  (map
+   (fn [field]
+     (if (v/cascalog-var? field)
+       (m/get tuple field)
+       field))
+   fields))
+
 (defn mk-filterfn
-  [op]
+  [op input]
   (let [fn-name (gensym "filterfn")]
     (intern *ns* fn-name (fn []
                            (fn [conf context]
                              (reify storm.trident.operation.Filter
                                (isKeep [_ tuple]
-                                 (if-let [args (into [] (m/vals tuple))]
-                                   (apply op args)
+                                 (if (m/first tuple)
+                                   (let [args (select-fields-w-default input tuple)]
+                                     (apply op args))
                                    false))))))
     (let [my-var (ns-resolve *ns* fn-name)]
       (m/clojure-filter* my-var []))))
@@ -152,8 +163,8 @@
   (mk-mapcat-tridentfn op))
 
 (defn filter-op-storm
-  [op]
-  (mk-filterfn op))
+  [op input]
+  (mk-filterfn op input))
 
 (defmethod pred/to-predicate FirstN
   [op input output]
@@ -178,9 +189,13 @@
   [op input output]
   (Operation. op input output))
 
-(m/deffilter filter-null
+(m/deffilter filter-first-null
   [tuple]
   (not (nil? (m/first tuple))))
+
+(m/deffilter filter-any-null
+  [tuple]
+  (not-any? nil? (into [] (m/vals tuple))))
 
 (m/deftridentfn identity-args
   [tuple coll]
@@ -200,10 +215,8 @@
 
 (m/defcombineraggregator all-values-update
   ([] nil)
-  ([tuple]
-     [tuple])
-  ([t1 t2]
-     (concat t1 t2)))
+  ([tuple] [tuple])
+  ([t1 t2] (concat t1 t2)))
 
 (defn rename-fields [stream input output]
   (-> stream (m/each input identity-args output)
@@ -241,10 +254,13 @@
   (to-generator [{:keys [source filter]}]
     (let [{:keys [drpc topology stream]} source
           {:keys [op input]} filter
-          revised-op (filter-op-storm op)]
+          revised-op (filter-op-storm op input)
+          stream-input (clojure.core/filter v/cascalog-var? input)]
       (if (instance? FirstN op)
         (merge source {:stream (.applyAssembly stream op)})
-        (merge source {:stream (m/each stream input revised-op)}))))
+        (merge source {:stream (-> (m/each stream stream-input revised-op)
+                                   (m/debug)
+                                   )}))))
 
   Join
   (to-generator [{:keys [sources join-fields type-seq options]}]
@@ -254,18 +270,10 @@
           l-stream (:stream l-source)
           r-stream (:stream r-source)
           l-feeders (:feeders l-source)
-          r-feeders (:feeders r-source)            
+          r-feeders (:feeders r-source)
           [l-type-seq r-type-seq & rest-type-seqs] type-seq
           [l-fields l-type] l-type-seq
-          [r-fields r-type] r-type-seq
-
-          l-fields-renamed (map #(str % "_new" ) l-fields)]
-
-      (prn "l-fields " l-fields)
-      (prn "r-fields " r-fields)
-      (prn "join-fields " join-fields)
-
-
+          [r-fields r-type] r-type-seq]
       (let [
             ;; make one of the streams a state
             rand-field [(gensym "random")]
@@ -283,7 +291,8 @@
                                               join-fields
                                               (MapGet.)
                                               rand-field)
-                               (m/each rand-field flatten-vals l-state-fields))]
+                               (m/each rand-field flatten-vals l-state-fields)
+                               (m/each l-state-fields filter-any-null))]
         
         (merge l-source
                {:stream r-query-stream
@@ -404,12 +413,10 @@
   ;; These generators act differently than the ones above
   TailStruct
   (generator [sq output]
-    (prn "inside tailstruct")
     (compile-query sq))
 
   RawSubquery
   (generator [sq output]
-    (prn "inside raw subquery")
     (generator (parse/build-rule sq) output)))
 
 
@@ -454,18 +461,21 @@
          (bind output-fields (:available-fields tstruct))
          (bind drpc-name (u/uuid))
          (bind stream-output-fields (.getOutputFields stream))
+         (bind rand-field [(gensym "random")])
          (bind updated-stream (-> stream
                                   (m/group-by stream-output-fields)
                                   (m/persistent-aggregate (MemoryMapState$Factory.)
                                                           stream-output-fields
-                                                          last-value-update
-                                                          [(gensym "random")])))
+                                                          all-values-update
+                                                          rand-field)))
          (-> (m/drpc-stream topo drpc-name drpc)
              (m/broadcast)
              (m/state-query updated-stream
                             ["args"]
                             (TupleCollectionGet.)
-                            output-fields)
+                            (concat stream-output-fields rand-field))
+             (m/project rand-field)
+             (m/each rand-field flatten-vals stream-output-fields)
              (m/project output-fields))      
          (tri/with-topology [cluster topo]
            (doseq [{:keys [spout vals]} feeders]

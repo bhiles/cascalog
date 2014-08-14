@@ -49,7 +49,7 @@
                            (Thread/sleep 1000)
                            ))))))
 
-(def my-spout (tri/feeder-spout ["line"]))
+
 
 (defn build-topology [spout]
   (let [trident-topology (TridentTopology.)
@@ -59,49 +59,14 @@
                         (m/debug))]
     trident-topology))
 
-;; (def cluster (LocalCluster.))
-;; (def local-drpc (LocalDRPC.))
+(def my-spout (tri/feeder-spout ["line"]))
 
-(defn test-topo-2 []
-  (api/<- [?w3]
-          (my-spout ?w)
-          ((fn [x] (str x "???")) ?w :> ?w2)
-          ((fn [x] (str x "!!!")) ?w2 :> ?w3)))
+(def json-stream-orig
+  (splat/with-topology (api/<- [?json]
+                         (my-spout ?line)
+                         ((api/mapfn [t] (json/read-str t)) ?line :> ?json))))
 
-(defn test-topo []
-  (api/<- [?w2]
-          (my-spout ?l)
-          ((api/mapcatfn [x] (clojure.string/split x #" ")) ?l :> ?w)
-          ((api/mapfn [x] (str x "!!!")) ?w :> ?w2)
-          ((api/mapfn [x] (str x "???")) ?w2 :> ?w3)
-          ((api/filterfn [x] (= "hi" x)) ?w)
-          (ops/count ?w :> ?count)
-          ))
-
-;; test to see that the name is the same:
-;; (take 2 (repeatedly #(splat/mk-map-tridentfn "abc" + "a" "b")))
-
-(defn create-repos []
-  (api/<- [?json]
-          (my-spout ?line)
-          ((api/mapfn [t]
-                      (prn "text is " t)
-                      (json/read-str t)) ?line :> ?json)
-          ((api/filterfn [json]
-                         (prn "json is " json)
-                         (and (= (get json "type") "CreateEvent")
-                                     (= (-> ( get json "payload") (get "ref_type")) "repository")
-                                     )) ?json)          
-          ))
-
-
-(def json-stream
-  (api/<- [?json]
-          (my-spout ?line)
-          ((api/mapfn [t]
-                      (json/read-str t)) ?line :> ?json)))
-
-(def json-query (plat/compile-query json-stream))
+(def json-query (plat/compile-query json-stream-orig))
 (def json-stream (:stream json-query))
 
 (def repo-existence
