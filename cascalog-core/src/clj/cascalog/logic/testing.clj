@@ -4,7 +4,10 @@
             [jackknife.core :as u]
             [jackknife.seq :refer (unweave collectify multi-set)]
             [cascalog.cascading.tap :as tap]
-            [cascalog.cascading.io :as io])
+            [cascalog.cascading.io :as io]
+            [cascalog.storm.platform :as splat]
+            [cascalog.logic.parse :as parse]
+            )
   (:import [java.io File]
            [cascading.tuple Fields]))
 
@@ -73,9 +76,10 @@
                 out-tuples     (doall (map tap/get-sink-tuples sinks))]
             [specs out-tuples]))))))
 
-(defn test?- [& bindings]
-  (let [[specs out-tuples] (apply process?- bindings)]
-    (is-specs= specs out-tuples)))
+(defn test?- [spec-orig & bindings]
+  (prn "bindings are " bindings)
+  (let [out-tuples (apply splat/??- bindings)]
+    (is-specs= spec-orig out-tuples)))
 
 (defn check-tap-spec [tap spec]
   (is-tuplesets= (tap/get-sink-tuples tap) spec))
@@ -107,7 +111,7 @@
   (let [[begin body] (if (keyword? (first args))
                        (split-at 2 args)
                        (split-at 1 args))]
-    `(test?- ~@begin (<- ~@body))))
+    `(test?- ~@begin (splat/with-topology (<- ~@body)))))
 
 (defmacro thrown?<- [error & body]
-  `(is (~'thrown? ~error (<- ~@body))))
+  `(is (~'thrown? ~error (splat/with-topology (<- ~@body)))))

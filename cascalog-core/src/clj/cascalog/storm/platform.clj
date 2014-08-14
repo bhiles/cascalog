@@ -106,8 +106,8 @@
                            (fn [conf context]
                              (reify storm.trident.operation.Function
                                (execute [_ tuple coll]
-                                 (when-let [args (m/first tuple)]
-                                   (let [results (op args)]
+                                 (when-let [args (into [] (m/vals tuple))]
+                                   (let [results (apply op args)]
                                      (doseq [result results]
                                        (apply m/emit-fn coll (s/collectify result))))))))))
     (let [my-var (ns-resolve *ns* fn-name)]
@@ -120,8 +120,8 @@
                            (fn [conf context]
                              (reify storm.trident.operation.Function
                                (execute [_ tuple coll]
-                                 (when-let [args (m/first tuple)]
-                                   (let [result (op args)]
+                                 (when-let [args (into [] (m/vals tuple))]
+                                   (let [result (apply op args)]
                                      (apply m/emit-fn coll (s/collectify result)))))))))
     (let [my-var (ns-resolve *ns* fn-name)]
       (m/clojure-tridentfn* my-var []))))
@@ -133,8 +133,8 @@
                            (fn [conf context]
                              (reify storm.trident.operation.Filter
                                (isKeep [_ tuple]
-                                 (if-let [args (m/first tuple)]
-                                   (op args)
+                                 (if-let [args (into [] (m/vals tuple))]
+                                   (apply op args)
                                    false))))))
     (let [my-var (ns-resolve *ns* fn-name)]
       (m/clojure-filter* my-var []))))
@@ -213,7 +213,9 @@
           (let [updated-stream (m/state-query stream op input (MapGet.) output)]
             (merge source {:stream updated-stream})))        
         (do (let [revised-op (op-storm op)]
-              (let [updated-stream (-> (m/each stream input revised-op output))]
+              (let [updated-stream (-> (m/each stream input revised-op output)
+                                       (m/debug)
+                                       )]
                 (merge source {:stream updated-stream})))))))
 
   FilterApplication
@@ -225,6 +227,48 @@
         (merge source {:stream (.applyAssembly stream op)})
         (merge source {:stream (m/each stream input revised-op)}))))
 
+  Join
+  (to-generator [{:keys [sources join-fields type-seq options]}]
+    (let [[l-source r-source & rest-sources] sources
+          l-topology (:topology l-source)
+          r-topology (:topology r-source)
+          l-stream (:stream l-source)
+          r-stream (:stream r-source)
+          l-feeders (:feeders l-source)
+          r-feeders (:feeders r-source)            
+          [l-type-seq r-type-seq & rest-type-seqs] type-seq
+          [l-fields l-type] l-type-seq
+          [r-fields r-type] r-type-seq
+
+          l-fields-renamed (map #(str % "_new" ) l-fields)]
+
+      (prn "l-fields " l-fields)
+      (prn "r-fields " r-fields)
+      (prn "join-fields " join-fields)
+
+
+      (let [
+            ;; make one of the streams a state
+            
+            l-state-stream (-> l-stream
+                               (m/group-by join-fields)
+                               (m/persistent-aggregate (MemoryMapState$Factory.)
+                                                       join-fields
+                                                       last-value-update
+                                                       ["?n_new"]))
+
+            ;; fetch values from l-stream using r-stream values
+            
+            r-query-stream (m/state-query r-stream
+                                          l-state-stream
+                                          join-fields
+                                          (MapGet.)
+                                          ["?n"])]
+        
+        (merge l-source
+               {:stream r-query-stream
+                :feeders (concat l-feeders r-feeders)}))))
+  
   Grouping
   (to-generator [{:keys [source aggregators grouping-fields options]}]
     (let [{:keys [drpc topology stream]} source
@@ -273,6 +317,13 @@
 (defrecord VectorFeederSpout [spout vals])
 (defrecord DRPCStateTap [state topology])
 
+;; HACK: allows the same topology to be used for multiple generators
+(def ^:dynamic *TOPOLOGY* nil)
+
+(defmacro with-topology [& body]
+  `(binding [*TOPOLOGY* (TridentTopology.)]
+     ~@body))
+
 (extend-protocol IGenerator
   
   ;; storm generators
@@ -280,33 +331,30 @@
   clojure.lang.IPersistentVector
   (generator [v output]
     (let [spout (tri/feeder-spout (map #(str % "_spout") output))]
-      (.setWaitToEmit spout false)
+      (.setWaitToEmit spout true)
       (generator
        (VectorFeederSpout. spout v)
        output)))
 
   VectorFeederSpout
   (generator [gen output]
-    (let [topology (TridentTopology.)
-          spout (:spout gen)
+    (let [spout (:spout gen)
           spout-vals (:vals gen)
-          stream (-> (m/new-stream topology (u/uuid) spout)
+          stream (-> (m/new-stream *TOPOLOGY* (u/uuid) spout)
                      (rename-fields (.getOutputFields spout) output))]
-      {:topology topology :stream stream :feeders [gen]}))
+      {:topology *TOPOLOGY* :stream stream :feeders [gen]}))
   
   ITridentSpout
   (generator [gen output]
-    (let [topology (TridentTopology.)
-          stream (-> (m/new-stream topology (u/uuid) gen)
+    (let [stream (-> (m/new-stream *TOPOLOGY* (u/uuid) gen)
                      (rename-fields (.getOutputFields gen) output))]
-      {:topology topology :stream stream}))
+      {:topology *TOPOLOGY* :stream stream}))
 
   IBatchSpout
   (generator [gen output]
-    (let [topology (TridentTopology.)
-          stream (-> (m/new-stream topology (u/uuid) gen)
+    (let [stream (-> (m/new-stream *TOPOLOGY* (u/uuid) gen)
                      (rename-fields (.getOutputFields gen) output))]
-      {:topology topology :stream stream}))
+      {:topology *TOPOLOGY* :stream stream}))
   
   Stream
   (generator [stream output]
@@ -338,10 +386,12 @@
   ;; These generators act differently than the ones above
   TailStruct
   (generator [sq output]
+    (prn "inside tailstruct")
     (compile-query sq))
 
   RawSubquery
   (generator [sq output]
+    (prn "inside raw subquery")
     (generator (parse/build-rule sq) output)))
 
 
@@ -360,6 +410,7 @@
     (satisfies? IGenerator x))
 
   (generator [_ gen output options]
+    
     (generator gen output))
 
   (to-generator [_ x]
@@ -373,6 +424,11 @@
     (.submitTopology cluster (u/uuid) {} (.build topology))
     cluster))
 
+(m/defcombineraggregator last-value-update
+  ([] nil)
+  ([tuple] tuple)
+  ([t1 t2] t2))
+
 (defn ??- [tstruct]
   (let [results (atom nil)]
     (st/with-local-cluster [cluster]
@@ -384,9 +440,16 @@
          (bind feeders (:feeders query))
          (bind output-fields (:available-fields tstruct))
          (bind drpc-name (u/uuid))
+         (bind stream-output-fields (.getOutputFields stream))
+         (bind updated-stream (-> stream
+                                  (m/group-by stream-output-fields)
+                                  (m/persistent-aggregate (MemoryMapState$Factory.)
+                                                          stream-output-fields
+                                                          last-value-update
+                                                          [(gensym "random")])))
          (-> (m/drpc-stream topo drpc-name drpc)
              (m/broadcast)
-             (m/state-query stream
+             (m/state-query updated-stream
                             ["args"]
                             (TupleCollectionGet.)
                             output-fields)
@@ -398,5 +461,5 @@
     @results))
 
 (defmacro ??<- [& sq]
-  `(let [tstruct# (parse/<- ~@sq)]
+  `(let [tstruct# (with-topology (parse/<- ~@sq))]
      (??- tstruct#)))
