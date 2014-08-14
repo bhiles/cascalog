@@ -71,11 +71,33 @@
   (let [sentence [["hello this is a"]
                   ["say hello hello to the man"]
                   ["this is the cool beans man"]]]
-    (test?<- [["hello" 3] ["cool" 1] ["beans" 1]
-              ["the" 2] ["is" 2] ["say" 1] ["a" 1]
-              ["this" 2] ["to" 1] ["man" 2]]
+    (test?<- [["the" 2] ["say" 1] ["cool" 1]
+              ["hello" 3] ["man" 2] ["a" 1]
+              ["beans" 1] ["to" 1] ["is" 2]
+              ["this" 2]]
              [?w ?c]
              (sentence ?s)
              (split ?s :> ?w)
              (c/count ?c))))
 
+(deftest test-multi-agg
+  (let [value [["a" 1] ["a" 2] ["b" 10]
+               ["c" 3] ["b" 2] ["a" 6]]]
+    (test?<- [["c" 4] ["b" 14] ["a" 12]]
+             [?v ?a]
+             (value ?v ?n)
+             (c/count ?c)
+             (c/sum ?n :> ?s)
+             (+ ?s ?c :> ?a))))
+
+(deftest test-joins-aggs
+  (let [friend [["n" "a"] ["n" "j"] ["n" "q"]
+                ["j" "n"] ["j" "a"]
+                ["j" "z"] ["z" "t"]]
+        age    [["n" 25] ["z" 26] ["j" 20]] ]
+    (test?<- [["j"] ["n"]]
+             [?p]
+             (age ?p _)
+             (friend ?p _)
+             (c/count ?c)
+             (> ?c 2))))

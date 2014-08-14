@@ -142,7 +142,6 @@
 (def drpc-stars-time-tap (DRPCStateTap. stars-time-state
                                             (:topology json-query)))
 
-
 (def drpc-existing-repo-total-count-2
   (api/<- [?repo_name3 ?merged_day_count ]
           (drpc-stars-time-tap ?repo_name3 ?day2 ?day_star_count2)        

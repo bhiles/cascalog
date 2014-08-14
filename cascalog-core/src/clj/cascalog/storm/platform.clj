@@ -95,7 +95,8 @@
     (intern *ns* fn-name (fn []
                            (reify storm.trident.operation.CombinerAggregator
                              (zero [_] nil)
-                             (init [_ tuple] (init-var))
+                             (init [_ tuple]
+                               (apply init-var tuple))
                              (combine [_ t1 t2] (combine-var t1 t2)))))
     (let [my-var (ns-resolve *ns* fn-name)]
       (m/clojure-combiner-aggregator* my-var []))))
@@ -306,9 +307,7 @@
         (do
           (let [updated-stream (m/state-query stream op input (MapGet.) output)]
             (merge source {:stream updated-stream})))        
-        ;; TODO: need to handle multiple aggregators use chained agg
-        ;; TODO: I don't think you can apply partitionAggregate to a
-        ;; DRPC call
+        ;; TODO: I don't think you can apply partitionAggregate to a DRPC call
         (if (and (= (type op) ::d/aggregate)
                  (not (empty? drpc)))
           (do
@@ -318,18 +317,36 @@
                 updated-stream (-> stream
                                    (m/group-by revised-grouping-fields)
                                    (m/aggregate input revised-op output))]
-            (merge source {:stream updated-stream})))
-          (do
-            (let [revised-op (agg-op-storm op)
-                  revised-grouping-fields (if (empty? grouping-fields)
-                                            input grouping-fields)
-                  updated-stream (-> stream
-                                     (m/group-by revised-grouping-fields)
-                                     (m/persistent-aggregate (MemoryMapState$Factory.)
-                                                             input
-                                                             revised-op
-                                                             output))]
-              (merge source {:stream updated-stream})))))))
+              (merge source {:stream updated-stream})))
+          (if (> (count aggregators) 1)
+            (do
+              ;; do a chained seq when there are multiple aggregators
+              (loop [loop-aggregators aggregators
+                     loop-chained-agg (-> stream
+                                          (m/group-by grouping-fields)
+                                          (.chainedAgg))]
+                (let [[agg & rest-agg] loop-aggregators
+                      {:keys [op input output]} agg]
+                  (let [revised-op (agg-op-storm op)
+                        revised-chained-agg (.partitionAggregate
+                                             loop-chained-agg
+                                             (apply m/fields input)
+                                             revised-op
+                                             (apply m/fields output))]
+                    (if (empty? rest-agg)
+                      (merge source {:stream (-> (.chainEnd revised-chained-agg)
+                                                 (m/debug))})
+                      (recur rest-agg revised-chained-agg))))))
+            (do
+              (let [revised-op (agg-op-storm op)
+                    revised-grouping-fields (if (empty? grouping-fields)
+                                              input grouping-fields)
+                    updated-stream (-> stream
+                                       (m/group-by revised-grouping-fields)
+                                       (m/aggregate input
+                                                    revised-op
+                                                    output))]
+                (merge source {:stream updated-stream}))))))))
 
   TailStruct
   (to-generator [{:keys [node available-fields]}]
