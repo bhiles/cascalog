@@ -187,9 +187,30 @@
   (when-let [v (m/vals tuple)]
     (apply m/emit-fn coll v)))
 
+(m/deftridentfn flatten-vals
+  [tuple coll]
+  (when-let [vs (into [] (m/first tuple))]
+    (doseq [v vs]
+      (apply m/emit-fn coll v))))
+
+(m/defcombineraggregator last-value-update
+  ([] nil)
+  ([tuple] tuple)
+  ([t1 t2] t2))
+
+(m/defcombineraggregator all-values-update
+  ([] nil)
+  ([tuple]
+     [tuple])
+  ([t1 t2]
+     (concat t1 t2)))
+
 (defn rename-fields [stream input output]
   (-> stream (m/each input identity-args output)
       (m/project output)))
+
+(defn remove-val [vals v]
+  (remove #(some #{%} (s/collectify vals)) v))
 
 (defprotocol IRunner
   (to-generator [item]))
@@ -211,11 +232,9 @@
       (if (instance? TridentState op)
         (do
           (let [updated-stream (m/state-query stream op input (MapGet.) output)]
-            (merge source {:stream updated-stream})))        
+            (merge source {:stream updated-stream})))
         (do (let [revised-op (op-storm op)]
-              (let [updated-stream (-> (m/each stream input revised-op output)
-                                       (m/debug)
-                                       )]
+              (let [updated-stream (-> (m/each stream input revised-op output))]
                 (merge source {:stream updated-stream})))))))
 
   FilterApplication
@@ -249,21 +268,22 @@
 
       (let [
             ;; make one of the streams a state
-            
+            rand-field [(gensym "random")]
+            l-state-fields (remove-val join-fields l-fields)
             l-state-stream (-> l-stream
                                (m/group-by join-fields)
                                (m/persistent-aggregate (MemoryMapState$Factory.)
-                                                       join-fields
-                                                       last-value-update
-                                                       ["?n_new"]))
+                                                       l-state-fields
+                                                       all-values-update
+                                                       rand-field))
 
             ;; fetch values from l-stream using r-stream values
-            
-            r-query-stream (m/state-query r-stream
-                                          l-state-stream
-                                          join-fields
-                                          (MapGet.)
-                                          ["?n"])]
+            r-query-stream (-> (m/state-query r-stream
+                                              l-state-stream
+                                              join-fields
+                                              (MapGet.)
+                                              rand-field)
+                               (m/each rand-field flatten-vals l-state-fields))]
         
         (merge l-source
                {:stream r-query-stream
@@ -288,8 +308,7 @@
                                             input grouping-fields)
                 updated-stream (-> stream
                                    (m/group-by revised-grouping-fields)
-                                   (m/aggregate input revised-op output)
-                                   (m/debug))]
+                                   (m/aggregate input revised-op output))]
             (merge source {:stream updated-stream})))
           (do
             (let [revised-op (agg-op-storm op)
@@ -300,8 +319,7 @@
                                      (m/persistent-aggregate (MemoryMapState$Factory.)
                                                              input
                                                              revised-op
-                                                             output)
-                                     (m/debug))]
+                                                             output))]
               (merge source {:stream updated-stream})))))))
 
   TailStruct
@@ -423,11 +441,6 @@
     (m/debug stream)
     (.submitTopology cluster (u/uuid) {} (.build topology))
     cluster))
-
-(m/defcombineraggregator last-value-update
-  ([] nil)
-  ([tuple] tuple)
-  ([t1 t2] t2))
 
 (defn ??- [tstruct]
   (let [results (atom nil)]
