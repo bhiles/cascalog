@@ -460,23 +460,32 @@
          (bind feeders (:feeders query))
          (bind output-fields (:available-fields tstruct))
          (bind drpc-name (u/uuid))
-         (bind stream-output-fields (.getOutputFields stream))
-         (bind rand-field [(gensym "random")])
-         (bind updated-stream (-> stream
-                                  (m/group-by stream-output-fields)
-                                  (m/persistent-aggregate (MemoryMapState$Factory.)
-                                                          stream-output-fields
-                                                          all-values-update
-                                                          rand-field)))
-         (-> (m/drpc-stream topo drpc-name drpc)
-             (m/broadcast)
-             (m/state-query updated-stream
-                            ["args"]
-                            (TupleCollectionGet.)
-                            (concat stream-output-fields rand-field))
-             (m/project rand-field)
-             (m/each rand-field flatten-vals stream-output-fields)
-             (m/project output-fields))      
+         (if (instance? TridentState stream)
+           (-> (m/drpc-stream topo drpc-name drpc)
+               (m/broadcast)
+               (m/state-query stream
+                              ["args"]
+                              (TupleCollectionGet.)
+                              output-fields)
+               (m/project output-fields))
+           (do
+             (let [rand-field [(gensym "random")]
+                   stream-output-fields (.getOutputFields stream)
+                   updated-stream (-> stream
+                                      (m/group-by stream-output-fields)
+                                      (m/persistent-aggregate (MemoryMapState$Factory.)
+                                                              stream-output-fields
+                                                              all-values-update
+                                                              rand-field))]
+                 (-> (m/drpc-stream topo drpc-name drpc)
+                     (m/broadcast)
+                     (m/state-query updated-stream
+                                    ["args"]
+                                    (TupleCollectionGet.)
+                                    (concat stream-output-fields rand-field))
+                     (m/project rand-field)
+                     (m/each rand-field flatten-vals stream-output-fields)
+                     (m/project output-fields)))))
          (tri/with-topology [cluster topo]
            (doseq [{:keys [spout vals]} feeders]
              (tri/feed spout vals))

@@ -64,3 +64,18 @@
     ;; removed distinct test
     ))
 
+(defmapcatfn split [^String words]
+  (seq (.split words "\\s+")))
+
+(deftest test-countall
+  (let [sentence [["hello this is a"]
+                  ["say hello hello to the man"]
+                  ["this is the cool beans man"]]]
+    (test?<- [["hello" 3] ["cool" 1] ["beans" 1]
+              ["the" 2] ["is" 2] ["say" 1] ["a" 1]
+              ["this" 2] ["to" 1] ["man" 2]]
+             [?w ?c]
+             (sentence ?s)
+             (split ?s :> ?w)
+             (c/count ?c))))
+
