@@ -70,10 +70,13 @@
     (intern *ns* fn-name (fn []
                            (fn [conf context]
                              (reify storm.trident.operation.Aggregator
-                               (init [_ batch-id coll] (apply m/emit-fn coll (s/collectify (op))))
+                               (init [_ batch-id coll]
+                                 (atom 0))
                                (aggregate [_ state tuple coll]
-                                 (apply m/emit-fn coll (s/collectify (op state tuple))))
-                               (complete [_ state coll] (apply m/emit-fn coll (s/collectify (op state))))))))
+                                 (let [v (into [] (m/vals tuple))]
+                                   (swap! state #(apply op % v))))
+                               (complete [_ state coll]
+                                 (apply m/emit-fn coll (s/collectify (op @state))))))))
     (let [my-var (ns-resolve *ns* fn-name)]
       (m/clojure-aggregator* my-var []))))
 
@@ -178,7 +181,7 @@
 
 (defmethod agg-op-storm ::d/aggregate
   [op]
-  (mk-reduceraggregator op))
+  (mk-aggregator op))
 
 (defmethod agg-op-storm ParallelAggregator
   [op]
