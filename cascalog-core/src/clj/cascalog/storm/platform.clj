@@ -85,7 +85,7 @@
                              (init [_] (op))
                              (reduce [_ state tuple]
                                (when-let [v (into [] (m/vals tuple))]
-                                 (op state v))))))
+                                 (apply op state v))))))
     (let [my-var (ns-resolve *ns* fn-name)]
       (m/clojure-reducer-aggregator* my-var []))))
 
@@ -101,8 +101,17 @@
     (let [my-var (ns-resolve *ns* fn-name)]
       (m/clojure-combiner-aggregator* my-var []))))
 
+(defn select-fields-w-default
+  [fields tuple]
+  (map
+   (fn [field]
+     (if (v/cascalog-var? field)
+       (m/get tuple field)
+       field))
+   fields))
+
 (defn mk-mapcat-tridentfn
-  [op]
+  [op input]
   (let [fn-name (gensym "mapcattridentfn")]
     (intern *ns* fn-name (fn []
                            (fn [conf context]
@@ -116,26 +125,18 @@
       (m/clojure-tridentfn* my-var []))))
 
 (defn mk-map-tridentfn
-  [op]
+  [op input]
   (let [fn-name (gensym "maptridentfn")]
     (intern *ns* fn-name (fn []
                            (fn [conf context]
                              (reify storm.trident.operation.Function
                                (execute [_ tuple coll]
-                                 (when-let [args (into [] (m/vals tuple))]
-                                   (let [result (apply op args)]
+                                 (when-let [test-args (into [] (m/vals tuple))]
+                                   (let [args (select-fields-w-default input tuple)
+                                         result (apply op args)]
                                      (apply m/emit-fn coll (s/collectify result)))))))))
     (let [my-var (ns-resolve *ns* fn-name)]
       (m/clojure-tridentfn* my-var []))))
-
-(defn select-fields-w-default
-  [fields tuple]
-  (map
-   (fn [field]
-     (if (v/cascalog-var? field)
-       (m/get tuple field)
-       field))
-   fields))
 
 (defn mk-filterfn
   [op input]
@@ -152,16 +153,16 @@
       (m/clojure-filter* my-var []))))
 
 (defmulti op-storm
-  (fn [op]
+  (fn [op input]
     (type op)))
 
 (defmethod op-storm ::d/map
-  [op]
-  (mk-map-tridentfn op))
+  [op input]
+  (mk-map-tridentfn op input))
 
 (defmethod op-storm ::d/mapcat
-  [op]
-  (mk-mapcat-tridentfn op))
+  [op input]
+  (mk-mapcat-tridentfn op input))
 
 (defn filter-op-storm
   [op input]
@@ -242,13 +243,14 @@
   Application
   (to-generator [{:keys [source operation]}]
     (let [{:keys [drpc topology stream]} source
-          {:keys [op input output]} operation]
+          {:keys [op input output]} operation
+          stream-input (clojure.core/filter v/cascalog-var? input)]
       (if (instance? TridentState op)
         (do
           (let [updated-stream (m/state-query stream op input (MapGet.) output)]
             (merge source {:stream updated-stream})))
-        (do (let [revised-op (op-storm op)]
-              (let [updated-stream (-> (m/each stream input revised-op output))]
+        (do (let [revised-op (op-storm op input)]
+              (let [updated-stream (-> (m/each stream stream-input revised-op output))]
                 (merge source {:stream updated-stream})))))))
 
   FilterApplication

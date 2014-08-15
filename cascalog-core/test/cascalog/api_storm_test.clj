@@ -101,3 +101,37 @@
              (friend ?p _)
              (c/count ?c)
              (> ?c 2))))
+
+(deftest test-global-agg
+  (let [num [[1] [2] [5] [6] [10] [12]]]
+    (test?<- [[6]]
+             [?c]
+             (num _)
+             (c/count ?c))
+    (test?<- [[6 72]]
+             [?c ?s2]
+             (num ?n)
+             (c/count ?c)
+             (c/sum ?n :> ?s)
+             (* 2 ?s :> ?s2))))
+
+(defaggregatefn evens-vs-odds
+  "Decrements state for odd inputs, increases for even. Returns final
+   state as a 1-tuple."
+  ([] 0)
+  ([context val] (if (odd? val)
+                   (dec context)
+                   (inc context)))
+  ([context] [context]))
+
+(deftest test-complex-noncomplex-agg-mix
+  (let [num [["a" 1] ["a" 2] ["a" 5]
+             ["c" 6] ["d" 9] ["a" 12]
+             ["c" 16] ["e" 16]] ]
+    (test?<- [["a" 4 0 20] ["e" 1 1 16]
+              ["d" 1 -1 9] ["c" 2 2 22]]
+             [?a ?c ?e ?s]
+             (num ?a ?n)
+             (c/count ?c)
+             (c/sum ?n :> ?s)
+             (evens-vs-odds ?n :> ?e))))
