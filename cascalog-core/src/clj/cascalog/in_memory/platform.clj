@@ -15,6 +15,18 @@
            [cascalog.logic.def ParallelAggregator ParallelBuffer]
            [jcascalog Subquery]))
 
+(defmethod print-method clojure.lang.LazySeq
+  [coll ^java.io.Writer writer]
+  (binding [*out* writer]
+    (print "(")
+    (let [l 2
+          first-few (take l coll)
+          others (drop l coll)]
+      (print (clojure.string/join " " (map pr-str first-few)))
+      (if (not (empty? others))
+        (print " ...")))
+    (print ")")))
+
 ;; Platform
 
 (defrecord InMemoryPlatform []
